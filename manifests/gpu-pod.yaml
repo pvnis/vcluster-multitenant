@@ -1,0 +1,44 @@
+# A GPU workload as a tenant writes it, applied against a tenant's own API
+# server. Nothing here mentions vCluster: from inside, this is an ordinary pod.
+#
+# The three things that have to survive the sync to the host are the runtime
+# class, the HAMi resource requests, and the dev.gvisor.flag annotation that
+# lowers the sandbox's GPU memory limit.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gpu-probe
+  annotations:
+    # The runtime's limit is a ceiling; this may lower it but not raise it.
+    dev.gvisor.flag.nvproxy-gpu-memory-limit: "536870912"
+spec:
+  runtimeClassName: gvisor
+  restartPolicy: Never
+  containers:
+    - name: cudatest
+      image: docker.io/library/ubuntu:22.04
+      imagePullPolicy: IfNotPresent
+      command: ["/opt/gputest/cudatest"]
+      # Allocate 64 MiB twelve times, reporting what the device says it has.
+      args: ["64", "12", "alloc"]
+      resources:
+        limits:
+          nvidia.com/gpu: 1
+          nvidia.com/gpumem: 512
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: ["ALL"]
+      volumeMounts:
+        - name: gputest-bin
+          mountPath: /opt/gputest
+          readOnly: true
+  volumes:
+    # The test binaries arrive as a ConfigMap rather than a hostPath. Pod
+    # Security Admission on the host namespace refuses hostPath volumes, and
+    # it is right to: a tenant that can mount / can read the host's kubeconfig.
+    # 0555 so the kubelet marks them executable.
+    - name: gputest-bin
+      configMap:
+        name: gputest
+        defaultMode: 0555

@@ -1,0 +1,6 @@
+# Overlay for tenant-amd-a. Applied after tenant.yaml and amd-tenant.yaml:
+#   vcluster create tenant-amd-a -n tenant-amd-a \
+#     --values tenant.yaml --values amd-tenant.yaml --values tenant-amd-a.yaml
+controlPlane:
+  service:
+    httpsNodePort: 31543

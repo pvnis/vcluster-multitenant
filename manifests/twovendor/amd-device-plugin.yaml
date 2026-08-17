@@ -1,0 +1,88 @@
+# Advertises the GPU's VRAM as amd.com/gpu-vram-mib in 512 MiB units and
+# injects /dev/kfd and the render node into each requesting container.
+#
+# The card's shape is no longer configured. The plugin reads the framebuffer
+# size, the compute unit count and the queue-mask granularity out of the KFD
+# topology and publishes them as hami.io/node-amd-register, the way HAMi's
+# NVIDIA plugin publishes hami.io/node-nvidia-register. That replaces the
+# hand-set --vram-mib argument and the amd.com/gpu-cus / amd.com/gpu-count
+# node labels, all three of which were operator-asserted facts about hardware
+# the kernel already describes.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: amd-gpu-device-plugin
+  namespace: kube-system
+---
+# The plugin patches one annotation onto its own node and reads nothing else.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: amd-gpu-device-plugin
+rules:
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: amd-gpu-device-plugin
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: amd-gpu-device-plugin
+subjects:
+- kind: ServiceAccount
+  name: amd-gpu-device-plugin
+  namespace: kube-system
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: amd-gpu-device-plugin
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels: {name: amd-gpu-device-plugin}
+  template:
+    metadata:
+      labels: {name: amd-gpu-device-plugin}
+    spec:
+      serviceAccountName: amd-gpu-device-plugin
+      # Without this the DaemonSet would also land on sensai, which has an
+      # NVIDIA card and no /dev/kfd, and would advertise AMD VRAM that is not
+      # there. gpu.vendor is a placement policy, not a discovered fact, so it
+      # stays a label.
+      nodeSelector:
+        gpu.vendor: amd
+      priorityClassName: system-node-critical
+      tolerations:
+      - operator: Exists
+        effect: NoSchedule
+      containers:
+      - name: plugin
+        image: docker.io/library/amd-gpu-device-plugin:local
+        imagePullPolicy: Never
+        # --vram-mib is deliberately absent: 0 means "ask the kernel", and the
+        # plugin refuses to start rather than advertise a guessed figure.
+        args: ["--slice-mib=512"]
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef: {fieldPath: spec.nodeName}
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: device-plugin
+          mountPath: /var/lib/kubelet/device-plugins
+        - name: sys
+          mountPath: /sys
+          readOnly: true
+      volumes:
+      - name: device-plugin
+        hostPath:
+          path: /var/lib/kubelet/device-plugins
+      - name: sys
+        hostPath:
+          path: /sys

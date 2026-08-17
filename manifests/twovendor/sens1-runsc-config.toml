@@ -1,0 +1,17 @@
+# Options for the containerd shim io.containerd.runsc.v1.
+#
+# This file is decoded into pkg/shim/v1/runsc.Options, NOT into runsc's own
+# flat flag format. runsc flags belong under [runsc_config]; top-level keys
+# that do not match an Options field are silently ignored.
+root = "/var/lib/runsc"
+log_level = "debug"
+
+[runsc_config]
+  platform = "kvm"
+  amdproxy = "true"
+  # Upper-bound limits; per-container annotations may only lower these.
+  # sens1: Navi 32, 54 CUs, 12868124672 bytes of VRAM.
+  amdproxy-cu-mask = "0x3fffffffffffff"
+  amdproxy-gpu-memory-limit = "12868124672"
+  debug = "true"
+  debug-log = "/var/log/runsc/"

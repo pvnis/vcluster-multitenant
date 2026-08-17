@@ -1,0 +1,23 @@
+# Registers gVisor as the "runsc" runtime handler, which the cluster-wide
+# RuntimeClass "gvisor" selects. k3s generates config.toml itself and imports
+# this directory, so adding the handler here survives a k3s upgrade.
+[plugins."io.containerd.cri.v1.runtime".containerd.runtimes.runsc]
+  runtime_type = "io.containerd.runsc.v1"
+  # Without this, CRI drops pod annotations before they reach the OCI spec, so
+  # runsc never sees the dev.gvisor.flag.amdproxy-* overrides the AMD device
+  # plugin injects, and every pod silently runs with the node-wide ceiling.
+  pod_annotations = ["dev.gvisor.*"]
+  container_annotations = ["dev.gvisor.*"]
+
+[plugins."io.containerd.cri.v1.runtime".containerd.runtimes.runsc.options]
+  TypeUrl = "io.containerd.runsc.v1.options"
+  ConfigPath = "/etc/runsc/config.toml"
+
+# k3s omits the CNI block entirely when it is not managing CNI itself
+# (flannel-backend=none), so containerd falls back to the upstream defaults
+# /etc/cni/net.d and /opt/cni/bin. Cilium is configured with the k3s paths,
+# so without this containerd never finds the conflist and kubelet stays
+# NotReady with "cni plugin not initialized" even though Cilium is Running.
+[plugins."io.containerd.cri.v1.runtime".cni]
+  bin_dirs = ["/var/lib/rancher/k3s/data/cni"]
+  conf_dir = "/var/lib/rancher/k3s/agent/etc/cni/net.d"

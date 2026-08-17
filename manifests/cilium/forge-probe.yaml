@@ -1,0 +1,77 @@
+# Label-forgery attack probes. Applied INSIDE tenant-a, as tenant-a.
+#
+#   KUBECONFIG=kubeconfigs/tenant-a.yaml kubectl apply -f forge-probe.yaml
+#
+# The floor in tenant-floor.yaml is two policies, and each one names a label:
+#
+#   tenant-a-floor            selects namespace tenant=tenant-a, EXCLUDING
+#                             app=vcluster (the control-plane carve-out)
+#   tenant-a-floor-workloads  selects vcluster.loft.sh/managed-by=tenant-a
+#
+# Escaping both requires a pod to simultaneously claim app=vcluster AND shed
+# vcluster.loft.sh/managed-by. These three pods try exactly that.
+#
+# Established before writing this: vCluster passes tenant-set pod labels to the
+# host verbatim -- a tenant pod labelled app=netprobe-server appears on the host
+# as app=netprobe-server, untransformed. So the app=vcluster half is forgeable
+# for certain. The only question is the managed-by half.
+---
+# 1. Claim to be the control plane. Defeats the tenant-a-floor exclusion if the
+#    label survives to the host.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: forge-app
+  labels:
+    app: vcluster
+spec:
+  runtimeClassName: gvisor
+  containers:
+    - name: client
+      image: docker.io/library/busybox:1.36
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c", "sleep 86400"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities: {drop: ["ALL"]}
+---
+# 2. Claim to be the control plane AND overwrite the ownership label the second
+#    policy keys on. This is the full escape if the syncer honours it.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: forge-both
+  labels:
+    app: vcluster
+    vcluster.loft.sh/managed-by: not-a-tenant
+spec:
+  runtimeClassName: gvisor
+  containers:
+    - name: client
+      image: docker.io/library/busybox:1.36
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c", "sleep 86400"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities: {drop: ["ALL"]}
+---
+# 3. Impersonate the OTHER tenant. Worse than escaping if it works: it would not
+#    merely evade tenant-a's floor, it would inherit tenant-b's allow rules and
+#    reach tenant-b's workloads.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: forge-impersonate
+  labels:
+    app: vcluster
+    vcluster.loft.sh/managed-by: tenant-b
+spec:
+  runtimeClassName: gvisor
+  containers:
+    - name: client
+      image: docker.io/library/busybox:1.36
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c", "sleep 86400"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities: {drop: ["ALL"]}

@@ -1,0 +1,24 @@
+# Overlay for tenants that need to schedule NVIDIA GPU workloads onto sensai.
+# Applied after tenant.yaml (and, for a fresh tenant, before the per-tenant
+# port overlay):
+#   vcluster create tenant-c -n tenant-c --upgrade \
+#     --values tenant.yaml --values nv-tenant.yaml --values tenant-c.yaml
+#
+# Mirrors amd-tenant.yaml exactly, one node label different. See that file for
+# the full reasoning: fake nodes (tenant.yaml's default) carry neither a real
+# label nor a real allocatable, so a GPU pod's own scheduler can never place
+# it and the syncer never gets anything to create on the host. The selector
+# keeps the exposure to exactly one real node, sensai, and nothing else.
+#
+# sensai is where tenant-a and tenant-b's own control planes already run, so
+# unlike sens1 this is same-node traffic for them -- no cross-node Cilium
+# remote-node gotcha to work around (see tenant-netpol-amd.yaml). tenant-a and
+# tenant-b already have their existing admin-access netpol rule for exactly
+# this reason: it was written for same-node access to begin with.
+sync:
+  fromHost:
+    nodes:
+      enabled: true
+      selector:
+        labels:
+          gpu.vendor: nvidia

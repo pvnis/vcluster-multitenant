@@ -1,0 +1,73 @@
+# Layer 2: what a tenant's workloads are actually permitted to do.
+#
+#   sed 's/TENANT/tenant-a/g' tenant-allow.yaml | kubectl apply -f -
+#
+# Applied to the HOST namespace, like the quota and for the same reason: a
+# policy a tenant can see is a policy a tenant can delete.
+#
+# This policy's first job is not the allow list -- it is the act of selecting.
+# In Cilium an endpoint enters default-deny for a direction as soon as any
+# policy selects it in that direction. Selecting the tenant's workloads for
+# egress here is what closes egress at all; the rules below then reopen exactly
+# what is legitimate.
+#
+# Note what is NOT selected: the vCluster control plane (app=vcluster, and no
+# vcluster.loft.sh/managed-by label). It must keep unrestricted egress to reach
+# the host API server at 10.43.0.1, without which the syncer cannot create host
+# pods and the tenant's cluster is dead. Layer 1 carves it out of the denies for
+# the same reason.
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: tenant-baseline-allow
+  namespace: TENANT
+spec:
+  # Synced workloads only. The syncer stamps this label on every host pod it
+  # creates on the tenant's behalf, including the tenant's own CoreDNS.
+  endpointSelector:
+    matchLabels:
+      vcluster.loft.sh/managed-by: TENANT
+
+  ingress:
+    # A tenant's own pods reach each other, and its control plane reaches them
+    # (the syncer's kubelet proxy path, which is what serves `kubectl logs` and
+    # `kubectl exec` to the tenant).
+    - fromEndpoints:
+        - matchLabels:
+            io.cilium.k8s.namespace.labels.tenant: TENANT
+
+    # The node itself: kubelet health probes and the log/exec path terminate
+    # here. Without this, probes fail and pods flap.
+    - fromEntities:
+        - host
+
+  egress:
+    # Same tenant, both workloads and control plane.
+    - toEndpoints:
+        - matchLabels:
+            io.cilium.k8s.namespace.labels.tenant: TENANT
+
+    # DNS to the tenant's own CoreDNS, which vCluster injects as the resolver.
+    #
+    # The L7 `rules.dns` block is not decoration: it puts Cilium's DNS proxy in
+    # the path, which is the prerequisite for toFQDNs egress rules later. Adding
+    # it now costs nothing and avoids a second restart of every tenant pod when
+    # FQDN policy arrives.
+    - toEndpoints:
+        - matchLabels:
+            k8s-app: vcluster-kube-dns
+      toPorts:
+        - ports:
+            - {port: "53", protocol: UDP}
+            - {port: "53", protocol: TCP}
+          rules:
+            dns:
+              - matchPattern: "*"
+
+    # The tenant's own API server, reached through the vCluster service.
+    - toEntities:
+        - cluster
+      toPorts:
+        - ports:
+            - {port: "443", protocol: TCP}

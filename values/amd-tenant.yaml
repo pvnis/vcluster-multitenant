@@ -1,0 +1,37 @@
+# Overlay for tenants that need to schedule AMD GPU workloads onto sens1.
+# Applied after tenant.yaml, before the per-tenant port overlay:
+#   vcluster create tenant-amd-a -n tenant-amd-a \
+#     --values tenant.yaml --values amd-tenant.yaml --values tenant-amd-a.yaml
+#
+# tenant.yaml leaves nodes faked (sync.fromHost.nodes.enabled: false)
+# specifically so a tenant cannot see another tenant's node conditions. A GPU
+# workload needs the opposite: its own scheduler has to see sens1's real
+# amd.com/gpu-vram-mib allocatable and gpu.vendor=amd label, or every pod it
+# creates stays unschedulable inside the tenant's own view and the syncer never
+# gets a pod to create on the host at all. Fake nodes carry neither — measured,
+# a fake "sensai" node here has no GPU resource in .status.allocatable and no
+# gpu.vendor label, only a fixed generic capacity vcluster invents.
+#
+# The selector is what keeps this narrow. It syncs only nodes labelled
+# gpu.vendor=amd, which today is exactly sens1 — one real node, not the whole
+# host cluster's topology. A tenant given this overlay learns that one node's
+# real name, labels and current allocatable (including what other tenants have
+# already claimed there); it still cannot see sensai or any other tenant's
+# node conditions, and still cannot create, change or delete node objects,
+# since sync.fromHost is one-way.
+#
+# This does not, by itself, stop two tenants from racing to schedule on the
+# same resource. Each tenant's scheduler decides against its own synced view of
+# sens1, and that view is not updated by another tenant's claims until the
+# syncer's periodic resync catches up. The hard stop is the host's kubelet,
+# which admits a synced pod against the *real* current allocatable regardless
+# of which tenant asked — an over-optimistic placement fails or sticks Pending
+# there, visible back in the tenant as the same. The AMD device plugin's own
+# accounting is the source of truth in both cases; nothing here can widen it.
+sync:
+  fromHost:
+    nodes:
+      enabled: true
+      selector:
+        labels:
+          gpu.vendor: amd

@@ -1,0 +1,6 @@
+# sens1 joins sensai over Tailscale: it cannot reach sensai on the LAN, since
+# sensai sits behind NAT on 192.168.0.0/24. Cilium tunnels VXLAN between the
+# nodes IPs, so this address must be the Tailscale one on both sides.
+server: https://100.93.194.25:6443
+token-file: /root/k3s-join-token
+node-ip: 100.101.223.94

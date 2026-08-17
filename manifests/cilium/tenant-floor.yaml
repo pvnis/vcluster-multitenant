@@ -1,0 +1,128 @@
+# Layer 1: the floor a tenant cannot raise.
+#
+#   sed 's/TENANT/tenant-a/g' tenant-floor.yaml | kubectl apply -f -
+#
+# CiliumClusterwideNetworkPolicy is CLUSTER-scoped. It therefore lives in no
+# namespace, which means vCluster cannot sync it into a tenant and a tenant
+# cannot list, edit or delete it. That is the whole reason this is a CCNP and
+# not a CNP.
+#
+# Deny beats allow. Cilium evaluates deny rules ahead of every allow rule, from
+# any source -- CiliumNetworkPolicy, CiliumClusterwideNetworkPolicy, or plain
+# Kubernetes NetworkPolicy. This is what makes it safe to let tenants author
+# their own policies (see values/tenant.yaml): their policies are additive-allow
+# and can only ever widen what Layer 2 granted, but nothing they can write
+# reaches past these denies.
+#
+# Requires the namespace to carry the label `tenant=<name>`. Cilium exposes
+# namespace labels to selectors as io.cilium.k8s.namespace.labels.<key>.
+---
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: TENANT-floor
+spec:
+  # Every endpoint in the tenant's namespace EXCEPT its vCluster control plane.
+  #
+  # The carve-out is mandatory, not an optimisation: the syncer must reach the
+  # host API server at 10.43.0.1 to create host pods at all. Deny it and the
+  # tenant's cluster stops working entirely -- no pods, no logs, nothing.
+  #
+  # The carve-out keys on the SERVICE ACCOUNT, not on a pod label.
+  #
+  # An earlier version excluded `app NotIn [vcluster]`. Testing showed that is
+  # forgeable and therefore worthless as a boundary: vCluster passes tenant-set
+  # pod labels to the host verbatim, so a tenant pod labelled app=vcluster
+  # arrives on the host labelled app=vcluster, and Cilium's identity for it is
+  # indistinguishable from the real control plane's on that label:
+  #
+  #   control plane   k8s:app=vcluster  serviceaccount=vc-TENANT
+  #   forged workload k8s:app=vcluster  serviceaccount=vc-workload-TENANT
+  #
+  # The service account is not forgeable. Tenant service accounts are not synced
+  # to the host (sync.toHost.serviceAccounts is off), so every workload a tenant
+  # creates runs under the single host account vc-workload-TENANT, whatever
+  # serviceAccountName the tenant asked for. Only the control plane runs as
+  # vc-TENANT.
+  endpointSelector:
+    matchLabels:
+      io.cilium.k8s.namespace.labels.tenant: TENANT
+    matchExpressions:
+      - {key: io.cilium.k8s.policy.serviceaccount, operator: NotIn, values: [vc-TENANT]}
+
+  ingressDeny:
+    # Anything belonging to a different tenant. Not "not-my-namespace" -- the
+    # host's own system namespaces have no `tenant` label and are handled by
+    # their own rules, so this denies tenant-to-tenant specifically.
+    - fromEndpoints:
+        - matchExpressions:
+            - {key: io.cilium.k8s.namespace.labels.tenant, operator: Exists}
+            - {key: io.cilium.k8s.namespace.labels.tenant, operator: NotIn, values: [TENANT]}
+
+  egressDeny:
+    - toEndpoints:
+        - matchExpressions:
+            - {key: io.cilium.k8s.namespace.labels.tenant, operator: Exists}
+            - {key: io.cilium.k8s.namespace.labels.tenant, operator: NotIn, values: [TENANT]}
+
+    # North-south. Everything off-cluster is denied, with the cluster's own
+    # ranges carved out.
+    #
+    # This is deliberately an exception-to-a-deny rather than an allow rule. A
+    # tenant can duplicate an allow -- that is what additive-allow means -- but
+    # cannot un-except a deny. Granting a tenant internet access is therefore an
+    # explicit platform act: add the destination CIDR to this except list.
+    #
+    # Consequence worth knowing: the tenant's own CoreDNS is a synced workload,
+    # so it is selected here too. It stays authoritative for cluster-internal
+    # names and can no longer forward external ones. That is intended, and it is
+    # why external DNS inside a tenant fails rather than hangs.
+    - toCIDRSet:
+        - cidr: 0.0.0.0/0
+          except:
+            - 10.42.0.0/16   # pod CIDR
+            - 10.43.0.0/16   # service CIDR, includes kube-dns at 10.43.0.10
+---
+# The other half of the pair, keyed on a second independent un-forgeable label.
+#
+# VERIFIED (10 Aug 2026). vcluster.loft.sh/managed-by cannot be forged, at
+# creation or by a later `kubectl label --overwrite`. The syncer overwrites it
+# with the true owner and quarantines the tenant's attempted value into a
+# per-vCluster hashed key that no policy references:
+#
+#   tenant sets   vcluster.loft.sh/managed-by=escaped
+#   host receives vcluster.loft.sh/managed-by=tenant-a
+#                 vcluster.loft.sh/label-tenant-a-x-e5f1b28ab2=escaped
+#
+# Confirmed in Cilium's own identity for the forged pod, so this selector really
+# does match it. The real control plane carries no managed-by label at all,
+# which is what keeps it correctly exempt.
+#
+# Two policies rather than one because they key on two independent labels the
+# tenant cannot control -- the service account above, the syncer's ownership
+# stamp here. Forging either alone changes nothing.
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: TENANT-floor-workloads
+spec:
+  endpointSelector:
+    matchLabels:
+      vcluster.loft.sh/managed-by: TENANT
+
+  ingressDeny:
+    - fromEndpoints:
+        - matchExpressions:
+            - {key: io.cilium.k8s.namespace.labels.tenant, operator: Exists}
+            - {key: io.cilium.k8s.namespace.labels.tenant, operator: NotIn, values: [TENANT]}
+
+  egressDeny:
+    - toEndpoints:
+        - matchExpressions:
+            - {key: io.cilium.k8s.namespace.labels.tenant, operator: Exists}
+            - {key: io.cilium.k8s.namespace.labels.tenant, operator: NotIn, values: [TENANT]}
+    - toCIDRSet:
+        - cidr: 0.0.0.0/0
+          except:
+            - 10.42.0.0/16
+            - 10.43.0.0/16

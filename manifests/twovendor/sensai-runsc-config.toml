@@ -1,0 +1,10 @@
+log_level = "info"
+log_path = "/var/log/runsc-shim-%ID%.log"
+
+[runsc_config]
+  nvproxy = "true"
+  nvproxy-allow-unsupported-driver = "true"
+  nvproxy-docker = "true"
+  nvproxy-gpu-scheduler-socket = "/run/runsc-gpu-scheduler.sock"
+  nvproxy-gpu-weight = "100"
+  debug-log = "/var/log/runsc/%ID%/"

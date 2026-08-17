@@ -1,0 +1,6 @@
+# Overlay for tenant-c. Applied after tenant.yaml and nv-tenant.yaml:
+#   vcluster create tenant-c -n tenant-c \
+#     --values tenant.yaml --values nv-tenant.yaml --values tenant-c.yaml
+controlPlane:
+  service:
+    httpsNodePort: 31843

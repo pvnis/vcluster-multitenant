@@ -1,0 +1,76 @@
+# Network isolation probes. Applied INSIDE a tenant, with that tenant's
+# kubeconfig -- from in here this is an ordinary pod pair.
+#
+#   sed 's/TENANT/tenant-a/g' netprobe.yaml | KUBECONFIG=... kubectl apply -f -
+#
+# Deliberately long-lived, driven by `kubectl exec`, rather than one-shot pods
+# that probe at container start. A one-shot probe races the policy datapath:
+# under kube-router there was a ~2s window after pod start during which the new
+# pod's IP was not yet in the enforcing ipset, and the resulting connection
+# error is indistinguishable from correct enforcement. That produced two false
+# "cross-tenant blocked" conclusions. Exec-driven probes can retry, and a probe
+# that must fail can be retried for a full minute before being believed.
+#
+# Both pods run under gVisor -- the syncer forces runtimeClassName on every pod
+# a tenant creates -- so these also exercise Cilium against the sandbox.
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: netprobe-server
+  labels:
+    app: netprobe-server
+spec:
+  runtimeClassName: gvisor
+  containers:
+    - name: httpd
+      image: docker.io/library/busybox:1.36
+      imagePullPolicy: IfNotPresent
+      # -f foreground, -p port, -h docroot. The banner identifies the tenant so
+      # a cross-tenant success cannot be mistaken for an intra-tenant one.
+      command: ["/bin/sh", "-c"]
+      args:
+        - mkdir -p /tmp/www && echo "TENANT" > /tmp/www/index.html &&
+          exec httpd -f -p 8080 -h /tmp/www
+      ports:
+        - containerPort: 8080
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: netprobe
+spec:
+  selector:
+    app: netprobe-server
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: netprobe-client
+spec:
+  runtimeClassName: gvisor
+  containers:
+    - name: client
+      image: docker.io/library/busybox:1.36
+      imagePullPolicy: IfNotPresent
+      # A supervising loop rather than a bare `sleep 86400`. Observed: the bare
+      # sleep container exits with code 0 after a few seconds and restarts, and
+      # a client pod that is mid-restart makes `kubectl exec` fail in a way the
+      # probe used to score as "target unreachable" -- a false PASS on a deny
+      # test and a false FAIL on an allow test. The loop makes the pod
+      # unkillable-by-accident; test-isolation.sh separately distinguishes an
+      # exec failure from a connection failure so neither can be mistaken for
+      # the other. (Not a gVisor sleep bug: `sleep 60` under gVisor was measured
+      # taking exactly 60s.)
+      command: ["/bin/sh", "-c", "while true; do sleep 30; done"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: ["ALL"]

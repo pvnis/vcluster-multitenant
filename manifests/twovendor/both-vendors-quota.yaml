@@ -1,0 +1,69 @@
+# AMD half: 2 GiB of VRAM and 6 of 54 CUs, enforced in the Sentry on sens1.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: amd-mem
+  namespace: gpu-test
+  annotations:
+    dev.gvisor.flag.amdproxy-gpu-memory-limit: "2147483648"
+    dev.gvisor.flag.amdproxy-cu-mask: "0x3f"
+spec:
+  runtimeClassName: gvisor
+  restartPolicy: Never
+  containers:
+  - name: memprobe
+    image: docker.io/library/amdprobe:local
+    imagePullPolicy: Never
+    command: ["/memprobe", "63860", "64"]
+    resources:
+      limits: {amd.com/gpu-vram-mib: "4"}
+      requests: {amd.com/gpu-vram-mib: "4"}
+---
+# AMD CU-mask check: the sandbox must see only the 6 CUs it was granted.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: amd-cumask
+  namespace: gpu-test
+  annotations:
+    dev.gvisor.flag.amdproxy-cu-mask: "0x3f"
+    dev.gvisor.flag.amdproxy-gpu-memory-limit: "1073741824"
+spec:
+  runtimeClassName: gvisor
+  restartPolicy: Never
+  containers:
+  - name: cum
+    image: docker.io/library/amdprobe:local
+    imagePullPolicy: Never
+    command: ["/cum", "63860"]
+    resources:
+      limits: {amd.com/gpu-vram-mib: "2"}
+      requests: {amd.com/gpu-vram-mib: "2"}
+---
+# NVIDIA half: 512 MiB quota, enforced in the Sentry on sensai.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nv-quota
+  namespace: gpu-test
+  annotations:
+    dev.gvisor.flag.nvproxy-gpu-memory-limit: "536870912"
+spec:
+  runtimeClassName: gvisor
+  schedulerName: hami-scheduler
+  restartPolicy: Never
+  containers:
+  - name: cudatest
+    image: docker.io/library/ubuntu:22.04
+    imagePullPolicy: IfNotPresent
+    command: ["/opt/gputest/cudatest"]
+    args: ["64", "12", "alloc"]
+    env:
+    - {name: CUDATEST_HOLD_SECS, value: "2"}
+    resources:
+      limits: {nvidia.com/gpu: 1}
+    volumeMounts:
+    - {name: gputest-bin, mountPath: /opt/gputest, readOnly: true}
+  volumes:
+  - name: gputest-bin
+    hostPath: {path: /opt/gputest, type: Directory}

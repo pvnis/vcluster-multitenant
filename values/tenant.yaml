@@ -1,0 +1,93 @@
+# Shared vCluster values for every tenant on this cluster.
+#
+# Both tenants use identical settings; they differ only in the namespace they
+# are installed into, which is what separates their workloads on the host.
+
+sync:
+  fromHost:
+    # Tenants must be able to name `runtimeClassName: gvisor`. RuntimeClass is
+    # a cluster-scoped object that lives on the host, so without this the
+    # tenant's API server rejects the pod: it validates the name against its
+    # own (empty) set of RuntimeClasses.
+    #
+    # The sync is one-way. A tenant sees the host's runtime classes and cannot
+    # create, change or delete them.
+    runtimeClasses:
+      enabled: true
+
+    # Leave nodes faked rather than syncing the real ones. A fake node carries
+    # the capacity a tenant needs in order to schedule, without exposing the
+    # host node's name, labels, taints or image list. Turning this on would
+    # also let a tenant see every other tenant's node conditions.
+    nodes:
+      enabled: false
+
+  toHost:
+    pods:
+      enabled: true
+
+      # Force every pod this tenant creates onto gVisor, whatever the pod
+      # asked for.
+      #
+      # This is load-bearing. Without it a tenant escapes the sandbox in one
+      # line: the host's other runtime classes are ordinary runc handlers, and
+      # a pod naming `runtimeClassName: nvidia` gets the host kernel and a GPU
+      # with it. Verified -- such a pod reports the host's 6.8.0-117-generic,
+      # where a sandboxed one reports 4.19.0-gvisor.
+      #
+      # Setting it here means the tenant's choice never reaches containerd: the
+      # syncer overwrites the field on the host pod. A tenant may still name a
+      # class for its own reasons, and it has no effect on what it gets.
+      runtimeClassName: gvisor
+
+    # Let a tenant's own NetworkPolicies actually reach the host.
+    #
+    # Left off (the chart default), a tenant can author a NetworkPolicy, see it
+    # listed in their own cluster, and have it do nothing whatsoever -- it never
+    # leaves the vCluster. Verified: a policy created inside tenant-a never
+    # appeared in the host's tenant-a namespace. A tenant who believes they have
+    # segmented their application and has not is worse off than one who knows
+    # they cannot.
+    #
+    # This is only safe because of the Cilium floor in
+    # manifests/cilium/tenant-floor.yaml. NetworkPolicies are additive-allow, so
+    # anything a tenant writes here can only widen what Layer 2 granted -- a
+    # tenant allowing 0.0.0.0/0 egress genuinely does widen their own allow
+    # list. What stops that becoming an escape is that Cilium deny rules beat
+    # every allow, and those denies are cluster-scoped where no tenant can reach
+    # them. Do not enable this without that floor in place.
+    networkPolicies:
+      enabled: true
+
+# The tenant's own control plane, running as an ordinary pod in the tenant's
+# host namespace.
+#
+# The backing store is left at the open-source default: SQLite on a 5Gi
+# PersistentVolumeClaim, reached through kine. Embedded etcd would be the
+# choice for a control plane that has to survive its node, and it is a vCluster
+# Pro feature -- setting it without a platform login makes `vcluster create`
+# refuse to run at all.
+controlPlane:
+  # Give each tenant's API server a stable address on the node, so that a
+  # tenant kubeconfig keeps working without a `vcluster connect` process
+  # holding a port-forward open. `vcluster connect` remains the convenient way
+  # in; this is what makes the kubeconfig durable enough to hand to someone.
+  #
+  # The port itself is fixed per tenant in the overlay files beside this one,
+  # so that a tenant's endpoint survives the vCluster being deleted and
+  # recreated. On a real cluster this would be an ingress or a LoadBalancer
+  # address instead.
+  service:
+    spec:
+      type: NodePort
+
+  statefulSet:
+    # Modest, because a tenant control plane on a single-node box should not
+    # crowd out the workloads it exists to run.
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi

@@ -1,0 +1,85 @@
+# Network isolation for AMD-GPU tenants, whose workloads land on sens1 rather
+# than sensai. Otherwise identical to tenant-netpol.yaml; adapted because the
+# node IP and pod CIDR it allows through are specific to which node the
+# tenant's kubelet-proxy traffic and health probes actually come from.
+#
+# Applied to the HOST namespace, like the quota, and for the same reason: a
+# policy a tenant can see is a policy a tenant can delete.
+#
+#   sed 's/NAMESPACE/tenant-amd-a/' tenant-netpol-amd.yaml | kubectl apply -f -
+#
+# Cilium enforces these (this cluster moved off kube-router to Cilium; see
+# CILIUM-DESIGN.md), with no extra CNI needed.
+#
+# Ingress only. Egress is deliberately left open: closing it means enumerating
+# everything the vCluster control plane talks to, and getting that wrong takes
+# the tenant's API server down rather than merely leaking. See the runbook for
+# what that leaves open.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: NAMESPACE
+spec:
+  # Every pod in the namespace, including the vCluster control plane.
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-same-tenant
+  namespace: NAMESPACE
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    # A tenant's own pods reach each other. Both this namespace's workloads and
+    # its control plane live here, so this is also what lets the syncer be
+    # reached by the pods it manages.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: NAMESPACE
+
+    # sens1 itself (its k3s node-ip, the Tailscale address), which is how the
+    # kubelet reaches the vCluster's kubelet proxy on :10250 to serve
+    # `kubectl logs` and `kubectl exec` to the tenant. Without this those two
+    # break while everything else appears fine.
+    - from:
+        - ipBlock:
+            cidr: 100.101.223.94/32
+
+    # The admin client reaching the control plane's own NodePort service
+    # (`kubectl` against the tenant's kubeconfig, from outside the cluster).
+    #
+    # This is not sensai's Tailscale address, and finding that out cost a real
+    # debugging pass. tenant-netpol.yaml's equivalent rule allows sensai's LAN
+    # IP (192.168.0.198) because tenant-a/b's control planes run on sensai
+    # itself, where local hairpin traffic apparently reaches the pod carrying
+    # that address. This tenant's control plane runs on sens1, so the request
+    # crosses Cilium's cross-node overlay -- and once it does, Cilium
+    # re-attributes the source to the *sending node's* CiliumInternalIP, not
+    # the real client address. `hubble observe --pod tenant-amd-a/tenant-amd-a-0`
+    # named it outright while every guess (sens1's node-ip, sensai's Tailscale
+    # address, both already tried and both silently dropped with no RST, just
+    # a hung TCP handshake) kept failing silently:
+    #
+    #   10.42.0.14:36362 (remote-node) <> .../tenant-amd-a-0:8443 Policy denied DROPPED
+    #
+    # 10.42.0.14 is sensai's CiliumInternalIP (`kubectl get ciliumnode sensai`),
+    # a stable per-node address, not an ephemeral or Tailscale-routed one.
+    - from:
+        - ipBlock:
+            cidr: 10.42.0.14/32
+    # Pod-network traffic originating on sens1's node, which is where k3s's
+    # own health probes come from. sens1's pod CIDR, not sensai's.
+    - from:
+        - ipBlock:
+            cidr: 10.42.1.0/24
+      ports:
+        - protocol: TCP
+          port: 10250

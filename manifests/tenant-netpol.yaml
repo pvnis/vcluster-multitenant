@@ -1,0 +1,59 @@
+# Network isolation between tenants.
+#
+# Applied to the HOST namespace, like the quota, and for the same reason: a
+# policy a tenant can see is a policy a tenant can delete.
+#
+#   sed 's/NAMESPACE/tenant-a/' tenant-netpol.yaml | kubectl apply -f -
+#
+# k3s enforces NetworkPolicy with its embedded kube-router controller unless
+# started with --disable-network-policy. This node does not disable it, so
+# these take effect with no extra CNI.
+#
+# Ingress only. Egress is deliberately left open: closing it means enumerating
+# everything the vCluster control plane talks to, and getting that wrong takes
+# the tenant's API server down rather than merely leaking. See the runbook for
+# what that leaves open.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: NAMESPACE
+spec:
+  # Every pod in the namespace, including the vCluster control plane.
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-same-tenant
+  namespace: NAMESPACE
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    # A tenant's own pods reach each other. Both this namespace's workloads and
+    # its control plane live here, so this is also what lets the syncer be
+    # reached by the pods it manages.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: NAMESPACE
+
+    # The node itself, which is how the kubelet reaches the vCluster's kubelet
+    # proxy on :10250 to serve `kubectl logs` and `kubectl exec` to the tenant.
+    # Without this those two break while everything else appears fine.
+    - from:
+        - ipBlock:
+            cidr: 192.168.0.198/32
+    # Pod-network traffic originating on the node, which is where k3s's own
+    # health probes come from.
+    - from:
+        - ipBlock:
+            cidr: 10.42.0.0/24
+      ports:
+        - protocol: TCP
+          port: 10250

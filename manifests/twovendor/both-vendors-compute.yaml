@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nv-compute
+  namespace: gpu-test
+  annotations:
+    dev.gvisor.flag.nvproxy-gpu-memory-limit: "536870912"
+spec:
+  runtimeClassName: gvisor
+  schedulerName: hami-scheduler
+  restartPolicy: Never
+  containers:
+  - name: cudatest
+    image: docker.io/library/ubuntu:22.04
+    command: ["/opt/gputest/computetest"]
+    args: ["8", "200000", "twovendor"]
+    resources: {limits: {nvidia.com/gpu: 1}}
+    volumeMounts: [{name: b, mountPath: /opt/gputest, readOnly: true}]
+  volumes: [{name: b, hostPath: {path: /opt/gputest, type: Directory}}]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: amd-mem
+  namespace: gpu-test
+  annotations:
+    dev.gvisor.flag.amdproxy-gpu-memory-limit: "2147483648"
+    dev.gvisor.flag.amdproxy-cu-mask: "0x3f"
+spec:
+  runtimeClassName: gvisor
+  restartPolicy: Never
+  containers:
+  - name: memprobe
+    image: docker.io/library/amdprobe:local
+    imagePullPolicy: Never
+    command: ["/memprobe", "63860", "64"]
+    resources:
+      limits: {amd.com/gpu-vram-mib: "4"}
+      requests: {amd.com/gpu-vram-mib: "4"}

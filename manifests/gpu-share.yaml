@@ -1,0 +1,42 @@
+# A long-running GPU workload, applied to both tenants at once to show them
+# sharing one physical card.
+#
+# Substitute the tenant's name so the log lines can be told apart:
+#   sed 's/TENANT/a/' gpu-share.yaml | KUBECONFIG=... kubectl apply -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gpu-share
+  annotations:
+    dev.gvisor.flag.nvproxy-gpu-memory-limit: "536870912"
+spec:
+  runtimeClassName: gvisor
+  restartPolicy: Never
+  containers:
+    - name: computetest
+      image: docker.io/library/ubuntu:22.04
+      imagePullPolicy: IfNotPresent
+      command: ["/opt/gputest/computetest"]
+      # 300 seconds, 200000 iterations per thread, tagged with the tenant.
+      args: ["300", "200000", "TENANT"]
+      resources:
+        limits:
+          nvidia.com/gpu: 1
+          nvidia.com/gpumem: 2000
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: ["ALL"]
+      volumeMounts:
+        - name: gputest-bin
+          mountPath: /opt/gputest
+          readOnly: true
+  volumes:
+    # The test binaries arrive as a ConfigMap rather than a hostPath. Pod
+    # Security Admission on the host namespace refuses hostPath volumes, and
+    # it is right to: a tenant that can mount / can read the host's kubeconfig.
+    # 0555 so the kubelet marks them executable.
+    - name: gputest-bin
+      configMap:
+        name: gputest
+        defaultMode: 0555

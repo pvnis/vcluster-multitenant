@@ -1,0 +1,54 @@
+# Host-side limits on what a tenant can consume.
+#
+# These live on the HOST namespace, not inside the vCluster, and that is the
+# whole point: a tenant is an administrator of its own cluster and can delete
+# any quota it can see. Only the host's copy binds it, and a tenant cannot
+# reach the host API at all.
+#
+# Apply with the host kubeconfig, substituting the namespace:
+#   sed 's/NAMESPACE/tenant-a/' tenant-quota.yaml | kubectl apply -f -
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: tenant-quota
+  namespace: NAMESPACE
+spec:
+  hard:
+    # GPU. `nvidia.com/gpu` counts HAMi's split devices, of which this node
+    # advertises 10 for its one physical card; gpumem is in MiB. Between them
+    # these bound what a tenant can take of the GPU even before nvproxy
+    # enforces the per-sandbox share.
+    requests.nvidia.com/gpu: "4"
+    requests.nvidia.com/gpumem: "4096"
+
+    # CPU and memory. Note that quoting these obliges *every* pod in the
+    # namespace to declare requests and limits, including the vCluster control
+    # plane itself -- hence the LimitRange below, which supplies defaults for
+    # anything that does not.
+    requests.cpu: "4"
+    requests.memory: 8Gi
+    limits.cpu: "8"
+    limits.memory: 12Gi
+
+    # A ceiling on object count, so that a tenant cannot exhaust the host API
+    # server with pods that individually fit.
+    pods: "30"
+    persistentvolumeclaims: "10"
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: tenant-defaults
+  namespace: NAMESPACE
+spec:
+  limits:
+    - type: Container
+      # Applied to containers that state no limit, which is what keeps the
+      # quota above from rejecting them outright.
+      default:
+        cpu: 500m
+        memory: 512Mi
+      defaultRequest:
+        cpu: 50m
+        memory: 128Mi

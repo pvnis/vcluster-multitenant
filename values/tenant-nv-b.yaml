@@ -1,0 +1,6 @@
+# Overlay for tenant-nv-b. Applied after tenant.yaml and nv-tenant.yaml:
+#   vcluster create tenant-nv-b -n tenant-nv-b \
+#     --values tenant.yaml --values nv-tenant.yaml --values tenant-nv-b.yaml
+controlPlane:
+  service:
+    httpsNodePort: 32043

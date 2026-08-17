@@ -1,0 +1,47 @@
+# Admits cross-node admin access to an AMD tenant's control plane, on top of
+# tenant-netpol-amd.yaml's plain NetworkPolicies.
+#
+#   sed 's/NAMESPACE/tenant-amd-a/;s/RELEASE/tenant-amd-a/' tenant-cnp-amd.yaml | kubectl apply -f -
+#
+# A plain K8s NetworkPolicy ipBlock cannot express this. Cilium resolves a
+# source's identity before it ever asks whether an ipBlock CIDR matches, and
+# cross-node traffic that hasn't already gone through a CIDR-identity gets
+# classified as the reserved identity `remote-node` -- an ipBlock naming that
+# same address does not match it, because the traffic was never evaluated as
+# CIDR traffic to begin with. Measured with `hubble observe`, twice: two
+# different plausible admin-source addresses (sens1's own node-ip, sensai's
+# Tailscale address, and finally the correct one, sensai's CiliumInternalIP
+# 10.42.0.14) were each added as an ipBlock and each was silently dropped
+# anyway, all logged identically as
+#
+#   10.42.0.14:_ (remote-node) <> .../tenant-amd-a-0:8443 Policy denied DROPPED
+#
+# `fromEntities: [remote-node]` is the construct that actually matches that
+# identity. It exists only in CiliumNetworkPolicy, which is why this is a
+# separate object rather than another rule in the plain NetworkPolicy.
+#
+# Scoped to the control plane pod alone (release: RELEASE, the label vCluster
+# gives its own statefulset pod) and to the two ports the NodePort service
+# exposes, not the tenant's workloads. In a two-node cluster remote-node means
+# specifically "the other node" -- sensai reaching sens1 -- since a pod never
+# needs this to reach its own node; a third node added later would also match,
+# and that would need re-scoping.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-remote-node-admin
+  namespace: NAMESPACE
+spec:
+  endpointSelector:
+    matchLabels:
+      app: vcluster
+      release: RELEASE
+  ingress:
+    - fromEntities:
+        - remote-node
+      toPorts:
+        - ports:
+            - port: "8443"
+              protocol: TCP
+            - port: "10250"
+              protocol: TCP
