@@ -1,8 +1,11 @@
 # Cross-cluster tenancy findings (vCluster layer)
 
-Companion to the gVisor-side `~/gvisor/SECURITY-FINDINGS.md`. This file holds the
+Companion to the gVisor-side `../gvisor/SECURITY-FINDINGS.md`. This file holds the
 Kubernetes/vCluster-tenancy findings from the 2026-08-13 red-team, kept out of
-the gVisor repo per project convention. The red-teamer held only a tenant
+the gVisor repo per project convention. The two isolation layers are orthogonal:
+findings here are about the cluster-tenancy boundary (vCluster + host syncer),
+while the gVisor-side file covers the sandbox GPU boundary. See
+`../gvisor/GPU-ISOLATION.md` for how the layers fit together. The red-teamer held only a tenant
 vCluster token (tenant-nv-a) and attacked from inside it.
 
 ## OPEN — most important unverified avenue

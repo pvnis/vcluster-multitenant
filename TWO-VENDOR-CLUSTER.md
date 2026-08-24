@@ -5,6 +5,10 @@ compute/memory slices on one node and AMD VRAM/CU slices on the other**, with
 gVisor enforcing both in the Sentry. A pod asks for the vendor it wants and the
 scheduler puts it on the node that has it.
 
+> Companion to `README.md` (the single-vendor tenancy setup this extends). The
+> Sentry-side enforcement both vendors rely on is described in
+> `../gvisor/GPU-ISOLATION.md`.
+
 | | sensai | sens1 |
 | --- | --- | --- |
 | role | control-plane | worker |
