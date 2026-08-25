@@ -10,7 +10,8 @@ driver/plugin, and follow the matching column.
 
 For **why** the stack is shaped this way (the governing constraint, the four
 layers, the space-vs-time mechanisms), read `../gvisor/GPU-ISOLATION.md` first.
-This document is the *how*.
+This document is the *how*. `../gvisor/MULTI-TENANT-SETUP.md` is the same recipe
+from the gVisor repo's side — a companion to keep in sync with this one.
 
 > **What is trusted vs. what enforces.** Only two layers enforce isolation
 > against a hostile tenant: **gVisor** (the Sentry) and, for NVIDIA compute, the
