@@ -8,15 +8,20 @@ enforced by the sandbox rather than by anything they can reach.
 
 Verified end to end on `sensai` (k3s v1.36.2, one RTX 5070) on 2026-08-07.
 
+> **To stand up the *entire* stack** (gVisor, the NVIDIA open-driver fork, HAMi,
+> the device plugins, the in-tree webhook, the `gpu-scheduler`, and this tenancy
+> layer), start at **[`SETUP.md`](SETUP.md)** — the two-vendor full-stack recipe.
+> This README is the **tenancy layer** in depth (vCluster + Cilium + kubeconfigs).
+
 > **Where this sits.** This project is the **cluster-tenancy** layer of a
-> three-project stack. It decides *who* may run what (a vCluster + Cilium per
-> tenant); the **`gvisor`** project enforces *how much of the GPU* each resulting
-> sandbox may take (see `gvisor/GPU-ISOLATION.md`); and **`open-gpu-kernel-modules`**
-> provides the privileged driver mechanisms gVisor drives
-> (`open-gpu-kernel-modules/DRIVER-CHANGES.md`). The two isolation layers are
-> orthogonal in what they guarantee — see `SECURITY-FINDINGS.md` here and its
-> gVisor-side companion. The two-vendor (NVIDIA + AMD) cluster is documented in
-> `TWO-VENDOR-CLUSTER.md`.
+> four-project stack. It decides *who* may run what (a vCluster + Cilium per
+> tenant); **`gvisor`** enforces *how much of the GPU* each resulting sandbox may
+> take (`gvisor/GPU-ISOLATION.md`); **`HAMi-gvisor`** / upstream HAMi places pods
+> and the in-tree webhook translates their requests; and
+> **`open-gpu-kernel-modules`** provides the privileged driver mechanisms gVisor
+> drives (`open-gpu-kernel-modules/DRIVER-CHANGES.md`). The two isolation layers
+> are orthogonal in what they guarantee — see `SECURITY-FINDINGS.md` here and its
+> gVisor-side companion. The two-vendor cluster runbook is `TWO-VENDOR-CLUSTER.md`.
 
 - [What this gives you](#what-this-gives-you)
 - [Architecture](#architecture)
