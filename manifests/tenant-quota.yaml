@@ -41,6 +41,18 @@ spec:
     #     here and is admitted 4096 MiB of real GPU memory. The quota
     #     undercounts a multi-GPU pod by its device count.
     #
+    #     That second one is now mostly closed from the other side: the gVisor
+    #     quota webhook refuses a pod holding several devices *and* naming a
+    #     gpumem request, so the shape that undercounts cannot be created
+    #     unless this namespace is labelled to permit it:
+    #
+    #       kubectl label namespace NAMESPACE \
+    #           dev.gvisor.gpu-multi-device-fractions=allow
+    #
+    #     Label a namespace only where a tenant genuinely needs a model sharded
+    #     across cards for capacity, and lower requests.nvidia.com/gpumem to
+    #     account for the multiplication when you do.
+    #
     # Kubernetes has no capacity-aware quota that would fix this (and none for
     # DRA either); bounding the device count is the mechanism that exists.
     requests.nvidia.com/gpu: "4"
