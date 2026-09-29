@@ -1,0 +1,12 @@
+# nvidia-smi topo -m inside the sandbox (needs a NUMA node in sandbox sysfs).
+apiVersion: v1
+kind: Pod
+metadata: { name: topo, namespace: gpu-test }
+spec:
+  schedulerName: hami-scheduler
+  restartPolicy: Never
+  containers:
+  - name: t
+    image: docker.io/pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime
+    command: ["sh","-c","ls /sys/devices/system/node; cat /sys/devices/system/node/node0/cpulist; nvidia-smi topo -m; echo rc=$?"]
+    resources: { limits: { nvidia.com/gpu: 2 } }

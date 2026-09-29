@@ -45,12 +45,13 @@ The whole stack on one 8× B300 SXM6 AC box (NVSwitch/NVLink5, 275 GB each,
    `devicePlugin.runtimeClassName=nvidia`, `createRuntimeClass=true`; scheduler
    strategy patched to `Recreate`; `ld.so.preload` emptied in the ConfigMap,
    then the plugin pod deleted. Advertises 80 `nvidia.com/gpu` (8 × split 10).
-6. Webhook: `gvisor-webhook.yaml`. **This revision does not mint its own CA**:
-   it reads `caKey.pem caCert.pem serverKey.pem serverCert.pem` from its cwd, so
-   they are generated with openssl (SAN
-   `gvisor-injection-admission-webhook.e2e.svc`), stored in secret
-   `e2e/gvisor-webhook-certs`, and mounted as `workingDir`. The image is a
-   `FROM scratch` docker build imported with `k3s ctr images import`.
+6. Webhook: `gvisor-webhook.yaml`. Since gvisor d3560b369 it mints its own CA
+   and server certificate on every start and writes the CA into the
+   `MutatingWebhookConfiguration` it adopts, so nothing else is needed. (The
+   revision first deployed here panicked without four PEMs in its working
+   directory, which had to be made with openssl and mounted from a Secret.)
+   The image is a `FROM scratch` docker build imported with
+   `k3s ctr images import`.
 7. Tenants: namespaces labelled `gvisor=` and PSA `baseline`; host-side
    `tenant-quota.yaml` (a: 4 GPUs / 1.1M MiB, b: 2 GPUs / 200k MiB) and
    `tenant-netpol.yaml`; `vcluster create … --values tenant.yaml nv-tenant.yaml
@@ -65,6 +66,7 @@ The whole stack on one 8× B300 SXM6 AC box (NVSwitch/NVLink5, 275 GB each,
 | 2 GPUs × 50000 MiB (tenant-nv-b, after fix 3) | each GPU reports 50000; 45000 on each OK; +10000 on one refused |
 | weight-25 pod on 2 GPUs sharing one with weight 75 (after fix 4) | 1313 TFLOPS on the unshared GPU; 329 : 1022 on the shared one |
 | weight-25 pod alone on a GPU beside a 75/25 pair (after fix 4) | 1332 TFLOPS (894 before); pair 2.88 : 1 |
+| `nvidia-smi topo -m` in a 2-GPU pod (after fix 6) | `NV18` between the GPUs, CPU/NUMA affinity reported |
 | fractional, 1 GPU, 40000 MiB / 50 cores | sees 40000 MiB; 1316 TFLOPS bf16 alone |
 | 4-GPU pod (host and from tenant-nv-a) | 4 devices, all-pairs P2P, ~715 GiB/s NVLink copy, NCCL all-reduce 624 GB/s busbw, 5.4 PFLOPS |
 | 8-GPU pod | 10.86 PFLOPS, ~718 GiB/s to every peer, NCCL 8-way **696 GB/s** |
@@ -82,8 +84,8 @@ workload 1 : 1.
 ## Defects found, and their status
 
 Fixes are on the `b300-multigpu` branches of `pvnis/open-gpu-kernel-modules`
-(2fb966df, 5c2b0175) and `pvnis/gvisor` (03dc87380, de7f9f8f8). The node runs
-all of them.
+(2fb966df, 5c2b0175, b8550341) and `pvnis/gvisor` (03dc87380, de7f9f8f8,
+9e0e15c6b, d3560b369). The node runs all of them. Nothing is open.
 
 1. **FIXED: the broker's group table never freed entries (fail-open).**
    `g_ghostGroups[256]` gained a slot per channel group and never released
@@ -124,12 +126,38 @@ all of them.
    weight-75 pod): **1313** TFLOPS on its unshared GPU, **329 : 1022** on the
    shared one. Driver 5c2b0175, gvisor de7f9f8f8. With an older driver the
    scheduler falls back to the undivided behaviour.
-5. Open, minor: about 27% of `RESTART_RUNLIST` calls return `0x40`
-   (INVALID_STATE) on an 8-GPU pod (previously hidden behind the 0x57s);
-   detach and timeslice are unaffected. `nvidia-smi topo -m` fails inside the
-   sandbox. `SETUP.md` §7b says the webhook mints its own CA; this revision
-   does not (step 6). A driver `srcversion` does not change for edits under
-   `src/nvidia/`; check the build date in the `NVRM: loading` line instead.
+5. **FIXED: `RESTART_RUNLIST` → `0x40`, and the dmesg flood.** Once the
+   wrong-GPU `0x57`s were gone, the `0x40`s fell to 64 of 15,854 restarts
+   (0.4%), all in the final second of a tenant's life. At that point the
+   scheduler has not yet polled and noticed the exit, so its commands land
+   on channels mid-teardown. This is benign. More broadly, every broker
+   command logged at error level: 21,000 lines in 50 minutes. Successes now
+   log at `LEVEL_INFO` (not printed), the teardown case is counted, and the
+   poll output ends with `stats cmds_ok … restarts_teardown … table_full …`.
+   The same driver commit (b8550341) makes the partition probes
+   (0c/0d/0e, which ran TPC-partition and watermark controls on every CUDA
+   context) opt-in via `GhostProbe=1`, and defaults `GhostTpcCount` to 0.
+   Verified: a 75/25 pair splits 3.02:1 with zero GHOST lines in dmesg.
+6. **FIXED: `nvidia-smi topo -m` failed in the sandbox** ("Failed to run
+   topology matrix"). NVML walks `/sys/bus/pci/devices` to place each GPU on
+   the PCIe tree, and a sandbox had no PCI tree unless it also held RDMA
+   devices. `rdma.CollectGPUs` (gvisor 9e0e15c6b) snapshots the GPUs, their
+   bridges and root complexes, and NUMA aggregates, and runsc now does that for
+   every nvproxy sandbox. Scope: with nvproxy on node-wide that means *every*
+   sandbox sees the host GPUs' read-only PCI identity and link attributes; it
+   cannot be narrowed to GPU pods, because a Kubernetes sandbox is created from
+   the pause container's spec, which lists no devices. Forwarding
+   `NV_ESC_NUMA_INFO` and synthesizing a NUMA node were tried and dropped as
+   unnecessary. `topo.yaml` reproduces it.
+7. **FIXED: the webhook did not mint its own CA** (step 6; gvisor d3560b369).
+   `SETUP.md` §7b and `gvisor/CLAUDE.md` now describe what the code does.
+
+Two notes. A driver `srcversion` does not change for edits under
+`src/nvidia/` (the RM core is prebuilt, not hashed); check the build date in
+the `NVRM: loading` line instead. `//runsc/cmd:cmd_test` cannot run on this
+host, because Ubuntu 24.04 blocks unprivileged user namespaces
+(`kernel.apparmor_restrict_unprivileged_userns=1`); that is host policy, not
+a code failure.
 
 ### Deploying the fixes
 
@@ -140,7 +168,9 @@ persistenced; `rmmod`; copy the `.ko`s to `updates/nvidia-ghost`; `depmod`;
 gVisor: `bazel build //runsc:runsc //shim:containerd-shim-runsc-v1
 //webhook:webhook`. Install runsc/shim by `cp` to `.new` + `mv` (tenant
 control planes run under runsc). Rebuild and import the webhook image, delete
-the webhook pod, and restart `runsc-gpu-scheduler`.
+the webhook pod, and restart `runsc-gpu-scheduler`. The webhook needs no
+certificate Secret; delete `e2e/gvisor-webhook-certs` if an older deployment
+left one.
 
 ## Tear-down / revert of the driver
 

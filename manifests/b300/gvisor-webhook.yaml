@@ -1,6 +1,6 @@
 # In-tree gVisor quota webhook (gvisor/webhook). Registers its own
-# MutatingWebhookConfiguration (failurePolicy: Fail) on start and reconciles
-# the caBundle. Fires only on namespaces labelled `gvisor`.
+# MutatingWebhookConfiguration (failurePolicy: Fail) on start, minting a fresh
+# CA each time and writing it into the configuration's caBundle. Fires only on namespaces labelled `gvisor`.
 apiVersion: v1
 kind: Namespace
 metadata: { name: e2e }
@@ -46,8 +46,3 @@ spec:
         imagePullPolicy: Never
         args: ["--port=8443", "--pod-namespace-labels=gvisor"]
         ports: [{ containerPort: 8443 }]
-        # The webhook reads caKey/caCert/serverKey/serverCert.pem from its cwd.
-        # Create the secret first (see b300/README.md).
-        workingDir: /certs
-        volumeMounts: [{ name: certs, mountPath: /certs, readOnly: true }]
-      volumes: [{ name: certs, secret: { secretName: gvisor-webhook-certs } }]
