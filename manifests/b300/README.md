@@ -6,7 +6,7 @@ The whole stack on one 8× B300 SXM6 AC box (NVSwitch/NVLink5, 275 GB each,
 
     OS / kernel   Ubuntu 24.04.5, 7.0.0-34-generic
     driver        610.43.02 open modules from ~/open-gpu-kernel-modules
-                  (b300-multigpu, GHOST_TOTAL_TPC=74), userspace + FM 610.43.02
+                  (gpuslicing), userspace + FM 610.43.02
     k3s           v1.36.3+k3s1, flannel + kube-router netpol (no Cilium)
     runsc         ~/gvisor b300-multigpu (gpuslicing + per-device limit), systrap
     HAMi          2.9.0 upstream chart
@@ -26,14 +26,14 @@ The whole stack on one 8× B300 SXM6 AC box (NVSwitch/NVLink5, 275 GB each,
    Fork modules live in `/lib/modules/$(uname -r)/updates/nvidia-ghost/`,
    `depmod`'d, listed in `/etc/modules-load.d/nvidia.conf`, so they survive
    reboot.
-   The build is `gpuslicing` @ 0591164d with one local edit, deliberately not
-   committed because it is a per-GPU knob:
-   `src/nvidia/src/kernel/gpu/fifo/kernel_ctxshare.c`:
-   `#define GHOST_TOTAL_TPC 74` (was 24 for the RTX 5070). Then
-   `make modules -j64`, which takes about 1 minute on 224 cores.
-2. **`/etc/modprobe.d/nvidia-ghost.conf`: `GhostTpcCount=0`.** The hooked build
-   otherwise grants every CUDA context a 27-TPC partition, silently capping a
-   74-TPC B300 at about a third.
+   The build was originally `gpuslicing` @ 0591164d with `GHOST_TOTAL_TPC` edited
+   to 74 by hand; the driver now reads the TPC count from the GPU, so the build
+   needs no local edits. `make modules -j64` takes about 1 minute on 224 cores.
+2. **`/etc/modprobe.d/nvidia-ghost.conf`: `GhostTpcCount=0`.** Builds before
+   driver b8550341 otherwise grant every CUDA context a 27-TPC partition,
+   silently capping a 74-TPC B300 at about a third. Current builds are inert by
+   default (the probes need `GhostProbe=1`), so the line is now only a
+   safeguard against loading an older build.
 3. **runsc build deps** beyond the A100 list: `g++-aarch64-linux-gnu` (vdso
    genrule needs `cc1plus`) and `libbpf-dev` (`bpf/bpf_helpers.h`).
 4. `/etc/runsc/config.toml` (nvproxy, nvproxy-docker, allow-unsupported-driver,
@@ -161,7 +161,7 @@ a code failure.
 
 ### Deploying the fixes
 
-Driver: build `b300-multigpu` (plus the local `GHOST_TOTAL_TPC 74`), then run
+Driver: build `gpuslicing` (no local edits needed), then run
 the reload sequence: stop k3s + `k3s-killall.sh`, the scheduler, DCGM, FM and
 persistenced; `rmmod`; copy the `.ko`s to `updates/nvidia-ghost`; `depmod`;
 `modprobe`; start FM, wait for fabric `Completed`, start everything else.
