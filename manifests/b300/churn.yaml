@@ -1,0 +1,15 @@
+# Repeatedly creates CUDA contexts on some other GPU. With the pre-fix driver
+# every new channel group moved the broker's single g_ghostGpu here, so the
+# RPCs for a 75/25 pair on a different GPU went to the wrong GSP.
+apiVersion: v1
+kind: Pod
+metadata: { name: churn, namespace: gpu-test }
+spec:
+  schedulerName: hami-scheduler
+  restartPolicy: Never
+  containers:
+  - name: t
+    image: docker.io/pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime
+    command: ["sh","-c","end=$(( $(date +%s) + 75 )); n=0; while [ $(date +%s) -lt $end ]; do python -c 'import torch; torch.zeros(1,device=0); torch.cuda.synchronize()'; n=$((n+1)); done; echo CONTEXTS=$n"]
+    resources:
+      limits: { nvidia.com/gpu: 1, nvidia.com/gpumem: 10000, nvidia.com/gpucores: 10 }

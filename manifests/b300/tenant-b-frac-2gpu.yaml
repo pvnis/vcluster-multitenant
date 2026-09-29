@@ -1,0 +1,31 @@
+# Multi-GPU fractional pod: HAMi gives 50000 MiB on each of 2 GPUs. With the
+# per-device limit, each GPU reports 50000 MiB and 45000 fits on both, while
+# pushing one GPU past 50000 is refused.
+apiVersion: v1
+kind: Pod
+metadata: { name: frac-2gpu }
+spec:
+  schedulerName: hami-scheduler
+  restartPolicy: Never
+  containers:
+  - name: t
+    image: docker.io/pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime
+    command:
+    - python
+    - -c
+    - |
+      import torch
+      M = 1 << 20
+      for i in range(torch.cuda.device_count()):
+          f, t = torch.cuda.mem_get_info(i); print(f"DEV{i} total={t//M} free={f//M} MiB")
+      a = [torch.empty(45000 * M, dtype=torch.uint8, device=i) for i in range(2)]
+      print("ALLOC 45000 MiB on each GPU: OK")
+      for i in range(2):
+          f, t = torch.cuda.mem_get_info(i); print(f"DEV{i} after: free={f//M} MiB")
+      try:
+          b = torch.empty(10000 * M, dtype=torch.uint8, device=0)
+          print("ALLOC +10000 MiB on GPU0: ADMITTED (per-device limit NOT enforced)")
+      except torch.OutOfMemoryError:
+          print("ALLOC +10000 MiB on GPU0: refused (per-device limit enforced)")
+    resources:
+      limits: { nvidia.com/gpu: 2, nvidia.com/gpumem: 50000, nvidia.com/gpucores: 50, cpu: "4", memory: 16Gi }

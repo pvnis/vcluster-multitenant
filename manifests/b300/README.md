@@ -6,9 +6,9 @@ The whole stack on one 8× B300 SXM6 AC box (NVSwitch/NVLink5, 275 GB each,
 
     OS / kernel   Ubuntu 24.04.5, 7.0.0-34-generic
     driver        610.43.02 open modules from ~/open-gpu-kernel-modules
-                  (gpuslicing, GHOST_TOTAL_TPC=74), userspace + FM 610.43.02
+                  (b300-multigpu, GHOST_TOTAL_TPC=74), userspace + FM 610.43.02
     k3s           v1.36.3+k3s1, flannel + kube-router netpol (no Cilium)
-    runsc         ~/gvisor gpuslicing @ 2d4885967, systrap
+    runsc         ~/gvisor b300-multigpu (gpuslicing + per-device limit), systrap
     HAMi          2.9.0 upstream chart
     vCluster      0.36.1: tenant-nv-a (:31943), tenant-nv-b (:32043)
 
@@ -62,6 +62,7 @@ The whole stack on one 8× B300 SXM6 AC box (NVSwitch/NVLink5, 275 GB each,
 
 | test | result |
 | --- | --- |
+| 2 GPUs × 50000 MiB (tenant-nv-b, after fix 3) | each GPU reports 50000; 45000 on each OK; +10000 on one refused |
 | fractional, 1 GPU, 40000 MiB / 50 cores | sees 40000 MiB; 1316 TFLOPS bf16 alone |
 | 4-GPU pod (host and from tenant-nv-a) | 4 devices, all-pairs P2P, ~715 GiB/s NVLink copy, NCCL all-reduce 624 GB/s busbw, 5.4 PFLOPS |
 | 8-GPU pod | 10.86 PFLOPS, ~718 GiB/s to every peer, NCCL 8-way **696 GB/s** |
@@ -76,37 +77,59 @@ The cuBLAS split binding is the driver broker at work (dmesg shows
 DETACH/ATTACH → 0x0). Without the broker, the A100 run split the same
 workload 1 : 1.
 
-## Defects found
+## Defects found, and their status
 
-1. **The broker's group table never frees entries (fail-open).**
-   `g_ghostGroups[GHOST_MAX_GROUPS=256]` in `kernel_channel_group_api.c` gains a
-   slot per channel group and never releases one when a client goes away. A
-   4-GPU NCCL pod takes ~56 slots and an 8-GPU pod ~110, so the table filled
-   after 10 sandboxes. After that, new sandboxes are silently untracked: the
-   same 75/25 pair measured **645 : 644**. Nothing logs it. Only a module reload
-   clears it (stop k3s + `k3s-killall.sh`, FM, persistenced, DCGM, the
-   scheduler; `rmmod`; `modprobe`; restart). The ~450 `RESTART_RUNLIST`
-   / `SET_TIMESLICE` errors (`0x23` INVALID_CLIENT, `0x57` OBJECT_NOT_FOUND) are
-   the scheduler still acting on those dead entries. On a busy multi-GPU node
-   this is hours, not weeks.
-2. **The broker is single-GPU and keyed by pid.** `g_ghostGpu` is whichever GPU
-   last recorded a group, and `detach <pid>` acts on every channel that pid owns
-   on every GPU. `runsc gpu-scheduler` divides each GPU separately, so a
-   multi-GPU sandbox that shares one of its GPUs gets detached on all of them
-   during the other tenant's window. Not yet measured. Every test here kept
-   shared GPUs single-GPU per pod.
-3. **Multi-GPU fractional pods get 1/N of their memory.** HAMi's
-   `nvidia.com/gpumem` is per device, but the webhook (`gpushare.peakRequest`)
-   writes it as the sandbox-wide `nvproxy-gpu-memory-limit`. For
-   `gpu: 2, gpumem: 50000`, HAMi reserves 2 × 50000 but the sandbox is capped at
-   50000 in total. Each device still *reports* 50000 MiB, so after allocating
-   45000 on GPU0 an allocation on GPU1 OOMs with 3.7 GiB free. The error is on
-   the safe side (under-grant), but the per-device report is misleading. The
-   fix: multiply by the container's `nvidia.com/gpu` count, or make the Sentry
-   limit per device.
-4. Minor: `nvidia-smi topo -m` fails inside the sandbox ("Failed to run
-   topology matrix"); NCCL/P2P are unaffected. `SETUP.md` §7b says the webhook
-   mints a fresh CA; this revision does not (step 6).
+Fixes are on the `b300-multigpu` branches of `pvnis/open-gpu-kernel-modules`
+(2fb966df) and `pvnis/gvisor` (03dc87380). The node runs both.
+
+1. **FIXED: the broker's group table never freed entries (fail-open).**
+   `g_ghostGroups[256]` gained a slot per channel group and never released
+   one. A 4-GPU NCCL pod takes ~56 slots and an 8-GPU pod ~110, so the table
+   filled after 10 sandboxes; after that a 75/25 pair measured **645 : 644**,
+   with nothing logged. Slots are now released in `kchangrpapiDestruct_IMPL`
+   and reused, and a full table is logged. Verified: three 8-GPU NCCL pods in a
+   row, and the table drains to 0 after each.
+2. **FIXED: every broker RPC went to one GPU.** `g_ghostGpu` was whichever GPU
+   last recorded a group, and all groups' controls were sent there, so groups
+   on other GPUs got `OBJECT_NOT_FOUND`: 147 of 168 `SET_TIMESLICE` calls
+   failed on an 8-GPU pod. A tenant opening a context on GPU B could take
+   enforcement away from a pair on GPU A. Each group now carries its own
+   `OBJGPU`. Verified: 155/155 `SET_TIMESLICE` OK, and 75/25 held **3.06 : 1**
+   while another pod created 26 contexts on a different GPU.
+3. **FIXED: multi-GPU fractional pods got 1/N of their memory.** HAMi's
+   `gpumem` is per device; the webhook used it as the sandbox total. Now
+   runsc has `--nvproxy-gpu-memory-limit-per-device`, which attributes VRAM
+   to the device named in the `NV01_DEVICE_0` alloc it was made under.
+   Unattributable VRAM counts against every GPU. Each GPU reports its own
+   share. The webhook writes total = gpumem × GPUs, plus the per-device
+   annotation for multi-GPU pods. Scaling the total alone was rejected, because
+   a pod could then stack the whole total on one GPU, into another tenant's
+   memory. Verified from tenant-nv-b (`tenant-b-frac-2gpu.yaml`): each GPU
+   reports 50000 MiB, 45000 fits on both, and +10000 on GPU0 is refused.
+   Unit tests: `TestPerDeviceLimit*`, `TestDeviceOfResolvesThroughParents`,
+   `TestVirtualFBPerDevice`, `TestInjectGPUMemoryLimitMultiGPU`.
+4. **Open: broker control is per pid, not per GPU.** `detach <pid>` acts on
+   all of a sandbox's GPUs, while the scheduler decides per GPU. So a
+   multi-GPU sandbox that shares one GPU would be paused on all of them. This
+   comes from reading the code and has not been measured. The fix needs a GPU
+   qualifier in the procfs protocol and in `pkg/gpusched`.
+5. Open, minor: about 27% of `RESTART_RUNLIST` calls return `0x40`
+   (INVALID_STATE) on an 8-GPU pod (previously hidden behind the 0x57s);
+   detach and timeslice are unaffected. `nvidia-smi topo -m` fails inside the
+   sandbox. `SETUP.md` §7b says the webhook mints its own CA; this revision
+   does not (step 6). A driver `srcversion` does not change for edits under
+   `src/nvidia/`; check the build date in the `NVRM: loading` line instead.
+
+### Deploying the fixes
+
+Driver: build `b300-multigpu` (plus the local `GHOST_TOTAL_TPC 74`), then run
+the reload sequence: stop k3s + `k3s-killall.sh`, the scheduler, DCGM, FM and
+persistenced; `rmmod`; copy the `.ko`s to `updates/nvidia-ghost`; `depmod`;
+`modprobe`; start FM, wait for fabric `Completed`, start everything else.
+gVisor: `bazel build //runsc:runsc //shim:containerd-shim-runsc-v1
+//webhook:webhook`. Install runsc/shim by `cp` to `.new` + `mv` (tenant
+control planes run under runsc). Rebuild and import the webhook image, delete
+the webhook pod, and restart `runsc-gpu-scheduler`.
 
 ## Tear-down / revert of the driver
 
