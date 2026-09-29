@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Pod
+metadata: { name: smoke-frac, namespace: gpu-test }
+spec:
+  schedulerName: hami-scheduler
+  restartPolicy: Never
+  containers:
+  - name: t
+    image: docker.io/pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime
+    command: ["sh","-c","nvidia-smi; python /probe/gpuprobe.py"]
+    env: [{ name: MODE, value: matmul }, { name: SECONDS_, value: "8" }]
+    resources:
+      limits: { nvidia.com/gpu: 1, nvidia.com/gpumem: 40000, nvidia.com/gpucores: 50 }
+    volumeMounts: [{ name: probe, mountPath: /probe }]
+  volumes: [{ name: probe, configMap: { name: gpuprobe } }]

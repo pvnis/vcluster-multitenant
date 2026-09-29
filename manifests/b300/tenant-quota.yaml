@@ -1,0 +1,26 @@
+# Host-side quota for B300 tenants. Substitute NAMESPACE, GPUS and GPUMEM.
+# nvidia.com/gpu counts HAMi device slots (a pod asking for 4 uses 4 physical
+# B300s; a fractional pod uses 1 slot). gpumem is MiB *per device* in HAMi's
+# accounting (see README: the webhook turns it into a per-sandbox total).
+apiVersion: v1
+kind: ResourceQuota
+metadata: { name: tenant-quota, namespace: NAMESPACE }
+spec:
+  hard:
+    requests.nvidia.com/gpu: "GPUS"
+    requests.nvidia.com/gpumem: "GPUMEM"
+    requests.cpu: "32"
+    requests.memory: 256Gi
+    limits.cpu: "64"
+    limits.memory: 512Gi
+    pods: "30"
+    persistentvolumeclaims: "10"
+---
+apiVersion: v1
+kind: LimitRange
+metadata: { name: tenant-defaults, namespace: NAMESPACE }
+spec:
+  limits:
+  - type: Container
+    default: { cpu: "2", memory: 8Gi }
+    defaultRequest: { cpu: 100m, memory: 256Mi }

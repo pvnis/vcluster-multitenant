@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: share-a
+  namespace: gpu-test
+  annotations: { nvidia.com/use-gpuuuid: "GPU-7819dc34-985a-59a8-30fc-daafe87073f6" }
+spec:
+  schedulerName: hami-scheduler
+  restartPolicy: Never
+  containers:
+  - name: t
+    image: docker.io/pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime
+    command: ["python","/probe/gpuprobe.py"]
+    env: [{ name: MODE, value: matmul }, { name: SECONDS_, value: "40" }]
+    resources:
+      limits: { nvidia.com/gpu: 1, nvidia.com/gpumem: 100000, nvidia.com/gpucores: 75 }
+    volumeMounts: [{ name: probe, mountPath: /probe }]
+  volumes: [{ name: probe, configMap: { name: gpuprobe } }]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: share-b
+  namespace: gpu-test
+  annotations: { nvidia.com/use-gpuuuid: "GPU-7819dc34-985a-59a8-30fc-daafe87073f6" }
+spec:
+  schedulerName: hami-scheduler
+  restartPolicy: Never
+  containers:
+  - name: t
+    image: docker.io/pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime
+    command: ["python","/probe/gpuprobe.py"]
+    env: [{ name: MODE, value: matmul }, { name: SECONDS_, value: "40" }]
+    resources:
+      limits: { nvidia.com/gpu: 1, nvidia.com/gpumem: 100000, nvidia.com/gpucores: 25 }
+    volumeMounts: [{ name: probe, mountPath: /probe }]
+  volumes: [{ name: probe, configMap: { name: gpuprobe } }]
+---

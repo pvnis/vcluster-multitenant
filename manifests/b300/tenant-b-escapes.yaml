@@ -1,0 +1,36 @@
+# 1) multi-GPU + fractional: 2 devices x 50000 MiB each per HAMi
+apiVersion: v1
+kind: Pod
+metadata: { name: frac-2gpu }
+spec:
+  schedulerName: hami-scheduler
+  restartPolicy: Never
+  containers:
+  - name: t
+    image: docker.io/pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime
+    command: ["sh","-c","python /probe/gpuprobe.py; python -c \"import torch;x=[torch.empty(45000<<20,dtype=torch.uint8,device=i) for i in range(2)];print('ALLOC 2x45000MiB OK')\""]
+    env: [{ name: MODE, value: info }]
+    resources:
+      limits: { nvidia.com/gpu: 2, nvidia.com/gpumem: 50000, nvidia.com/gpucores: 50, cpu: "4", memory: 16Gi }
+    volumeMounts: [{ name: probe, mountPath: /probe }]
+  volumes: [{ name: probe, configMap: { name: gpuprobe } }]
+---
+# 2) runtime-class escape + self-raised quota annotation
+apiVersion: v1
+kind: Pod
+metadata:
+  name: escape-rc
+  annotations: { dev.gvisor.flag.nvproxy-gpu-memory-limit: "274877906944", dev.gvisor.flag.nvproxy-gpu-weight: "100" }
+spec:
+  runtimeClassName: nvidia
+  schedulerName: hami-scheduler
+  restartPolicy: Never
+  containers:
+  - name: t
+    image: docker.io/pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime
+    command: ["sh","-c","uname -r; python /probe/gpuprobe.py"]
+    env: [{ name: MODE, value: info }]
+    resources:
+      limits: { nvidia.com/gpu: 1, nvidia.com/gpumem: 20000, nvidia.com/gpucores: 20, cpu: "4", memory: 16Gi }
+    volumeMounts: [{ name: probe, mountPath: /probe }]
+  volumes: [{ name: probe, configMap: { name: gpuprobe } }]

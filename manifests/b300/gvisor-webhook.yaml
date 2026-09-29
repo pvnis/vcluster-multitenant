@@ -1,0 +1,53 @@
+# In-tree gVisor quota webhook (gvisor/webhook). Registers its own
+# MutatingWebhookConfiguration (failurePolicy: Fail) on start and reconciles
+# the caBundle. Fires only on namespaces labelled `gvisor`.
+apiVersion: v1
+kind: Namespace
+metadata: { name: e2e }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: gvisor-webhook, namespace: e2e }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: gvisor-webhook }
+rules:
+- apiGroups: ["admissionregistration.k8s.io"]
+  resources: ["mutatingwebhookconfigurations"]
+  verbs: ["create", "get", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: gvisor-webhook }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: gvisor-webhook }
+subjects: [{ kind: ServiceAccount, name: gvisor-webhook, namespace: e2e }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: gvisor-injection-admission-webhook, namespace: e2e }
+spec:
+  selector: { app: gvisor-webhook }
+  ports: [{ port: 443, targetPort: 8443 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: gvisor-webhook, namespace: e2e }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: gvisor-webhook } }
+  template:
+    metadata: { labels: { app: gvisor-webhook } }
+    spec:
+      serviceAccountName: gvisor-webhook
+      containers:
+      - name: webhook
+        image: docker.io/library/gvisor-webhook:local
+        imagePullPolicy: Never
+        args: ["--port=8443", "--pod-namespace-labels=gvisor"]
+        ports: [{ containerPort: 8443 }]
+        # The webhook reads caKey/caCert/serverKey/serverCert.pem from its cwd.
+        # Create the secret first (see b300/README.md).
+        workingDir: /certs
+        volumeMounts: [{ name: certs, mountPath: /certs, readOnly: true }]
+      volumes: [{ name: certs, secret: { secretName: gvisor-webhook-certs } }]

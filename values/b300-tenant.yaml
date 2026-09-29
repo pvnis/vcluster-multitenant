@@ -1,0 +1,10 @@
+# Overlay for tenants on the single-node B300 box (vm-jumbo-test-dmd), applied
+# after tenant.yaml and nv-tenant.yaml. This node runs flannel + k3s's
+# kube-router NetworkPolicy controller, NOT Cilium, so there is no cluster-scoped
+# deny floor (manifests/cilium/tenant-floor.yaml). tenant.yaml warns that
+# syncing tenant-authored NetworkPolicies is only safe with that floor, so it is
+# turned off here: the host-side netpol in manifests/b300/ is the only policy.
+sync:
+  toHost:
+    networkPolicies:
+      enabled: false
