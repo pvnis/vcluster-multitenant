@@ -63,6 +63,8 @@ The whole stack on one 8× B300 SXM6 AC box (NVSwitch/NVLink5, 275 GB each,
 | test | result |
 | --- | --- |
 | 2 GPUs × 50000 MiB (tenant-nv-b, after fix 3) | each GPU reports 50000; 45000 on each OK; +10000 on one refused |
+| weight-25 pod on 2 GPUs sharing one with weight 75 (after fix 4) | 1313 TFLOPS on the unshared GPU; 329 : 1022 on the shared one |
+| weight-25 pod alone on a GPU beside a 75/25 pair (after fix 4) | 1332 TFLOPS (894 before); pair 2.88 : 1 |
 | fractional, 1 GPU, 40000 MiB / 50 cores | sees 40000 MiB; 1316 TFLOPS bf16 alone |
 | 4-GPU pod (host and from tenant-nv-a) | 4 devices, all-pairs P2P, ~715 GiB/s NVLink copy, NCCL all-reduce 624 GB/s busbw, 5.4 PFLOPS |
 | 8-GPU pod | 10.86 PFLOPS, ~718 GiB/s to every peer, NCCL 8-way **696 GB/s** |
@@ -80,7 +82,8 @@ workload 1 : 1.
 ## Defects found, and their status
 
 Fixes are on the `b300-multigpu` branches of `pvnis/open-gpu-kernel-modules`
-(2fb966df) and `pvnis/gvisor` (03dc87380). The node runs both.
+(2fb966df, 5c2b0175) and `pvnis/gvisor` (03dc87380, de7f9f8f8). The node runs
+all of them.
 
 1. **FIXED: the broker's group table never freed entries (fail-open).**
    `g_ghostGroups[256]` gained a slot per channel group and never released
@@ -108,11 +111,19 @@ Fixes are on the `b300-multigpu` branches of `pvnis/open-gpu-kernel-modules`
    reports 50000 MiB, 45000 fits on both, and +10000 on GPU0 is refused.
    Unit tests: `TestPerDeviceLimit*`, `TestDeviceOfResolvesThroughParents`,
    `TestVirtualFBPerDevice`, `TestInjectGPUMemoryLimitMultiGPU`.
-4. **Open: broker control is per pid, not per GPU.** `detach <pid>` acts on
-   all of a sandbox's GPUs, while the scheduler decides per GPU. So a
-   multi-GPU sandbox that shares one GPU would be paused on all of them. This
-   comes from reading the code and has not been measured. The fix needs a GPU
-   qualifier in the procfs protocol and in `pkg/gpusched`.
+4. **FIXED: GPUs were not divided separately on the runlist.** There were two
+   halves. The driver took `detach/attach/ts <pid>` for all of a tenant's GPUs,
+   and the scheduler ran **one credit planner across the whole node**, so
+   sandboxes on different GPUs competed for one pool of credit. Measured
+   before (`solo-beside-pair.yaml` + `share-75-25.yaml`): a weight-25 pod
+   alone on its GPU got **894** TFLOPS instead of ~1330, and the pair on
+   another GPU fell to 2.14:1. Now the driver takes an optional PCI address
+   per command and reports per-(pid, GPU) state, and the scheduler keeps one
+   planner per GPU. After: the lone pod **1332**, the pair **2.88:1**. And
+   `multigpu-shared.yaml` (a weight-25 pod on 2 GPUs, sharing one with a
+   weight-75 pod): **1313** TFLOPS on its unshared GPU, **329 : 1022** on the
+   shared one. Driver 5c2b0175, gvisor de7f9f8f8. With an older driver the
+   scheduler falls back to the undivided behaviour.
 5. Open, minor: about 27% of `RESTART_RUNLIST` calls return `0x40`
    (INVALID_STATE) on an 8-GPU pod (previously hidden behind the 0x57s);
    detach and timeslice are unaffected. `nvidia-smi topo -m` fails inside the

@@ -1,0 +1,21 @@
+# A weight-25 pod alone on its GPU, run beside share-75-25.yaml (another GPU).
+# Alone on a GPU it should get the whole GPU (~1300+ TFLOPS) whatever its
+# weight; a scheduler that divides across GPUs would detach it.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: solo
+  namespace: gpu-test
+  annotations: { nvidia.com/use-gpuuuid: "GPU-45134e56-dca2-0b45-deca-fdf05a161f44" }
+spec:
+  schedulerName: hami-scheduler
+  restartPolicy: Never
+  containers:
+  - name: t
+    image: docker.io/pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime
+    command: ["python","/probe/gpuprobe.py"]
+    env: [{ name: MODE, value: matmul }, { name: SECONDS_, value: "40" }]
+    resources:
+      limits: { nvidia.com/gpu: 1, nvidia.com/gpumem: 100000, nvidia.com/gpucores: 25 }
+    volumeMounts: [{ name: probe, mountPath: /probe }]
+  volumes: [{ name: probe, configMap: { name: gpuprobe } }]

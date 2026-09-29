@@ -1,0 +1,40 @@
+# Bug 2 test: a weight-25 pod on two GPUs (A, B) shares only B with a
+# weight-75 pod. Per-GPU enforcement should leave A at full speed and split B
+# about 3:1; per-pid enforcement throttled the pod on A too.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mg
+  namespace: gpu-test
+  annotations: { nvidia.com/use-gpuuuid: "GPU-69267ce8-0a02-31e0-5e91-01f4ef73f477,GPU-dcfce9cb-011d-937c-9df1-33e4933d53cb" }
+spec:
+  schedulerName: hami-scheduler
+  restartPolicy: Never
+  containers:
+  - name: t
+    image: docker.io/pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime
+    command: ["python","/probe/gpuprobe.py"]
+    env: [{ name: MODE, value: matmul }, { name: SECONDS_, value: "40" }]
+    resources:
+      limits: { nvidia.com/gpu: 2, nvidia.com/gpumem: 100000, nvidia.com/gpucores: 25 }
+    volumeMounts: [{ name: probe, mountPath: /probe }]
+  volumes: [{ name: probe, configMap: { name: gpuprobe } }]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hi
+  namespace: gpu-test
+  annotations: { nvidia.com/use-gpuuuid: "GPU-dcfce9cb-011d-937c-9df1-33e4933d53cb" }
+spec:
+  schedulerName: hami-scheduler
+  restartPolicy: Never
+  containers:
+  - name: t
+    image: docker.io/pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime
+    command: ["python","/probe/gpuprobe.py"]
+    env: [{ name: MODE, value: matmul }, { name: SECONDS_, value: "40" }]
+    resources:
+      limits: { nvidia.com/gpu: 1, nvidia.com/gpumem: 100000, nvidia.com/gpucores: 75 }
+    volumeMounts: [{ name: probe, mountPath: /probe }]
+  volumes: [{ name: probe, configMap: { name: gpuprobe } }]
