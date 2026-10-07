@@ -1,0 +1,55 @@
+# Cilium for the midori cluster. Two settings here are not optional and one is
+# easy to get wrong silently; everything else is ordinary.
+#
+# Install with k3s started as:
+#   --flannel-backend=none --disable-network-policy --disable-kube-proxy
+#   --disable=servicelb        (Octavia provides LoadBalancer)
+# and point k8sServiceHost at the API VIP, because with kube-proxy disabled the
+# agents cannot reach the API through a ClusterIP before Cilium is up.
+
+k8sServiceHost: "<API_VIP>"   # the Octavia VIP in front of midori-cp-0/1/2
+k8sServicePort: 6443
+
+kubeProxyReplacement: true
+
+socketLB:
+  # MANDATORY. Cilium's default is to translate east-west traffic at the socket
+  # layer, in the pod's cgroup at connect(). A gVisor sandbox never makes that
+  # call -- the Sentry's netstack builds the packet itself -- so the packet
+  # reaches the datapath still addressed to the service VIP, resolves to the
+  # `world` identity, and is passed to a host stack that has no kube-proxy rules
+  # left to catch it. Every ClusterIP is then unreachable from every gVisor pod
+  # while external IPv4 and pod-to-pod still work, so it presents as a DNS fault.
+  # This confines socket LB to host-namespace sockets and moves pod service
+  # translation into the veth datapath, which gVisor's packets do traverse.
+  # Verify after install:
+  #   cilium-dbg status --verbose | grep "Socket LB Coverage"   -> Hostns-only
+  hostNamespaceOnly: true
+
+# OpenStack tenant networks here are VXLAN (1450). Cilium's own VXLAN on top
+# needs headroom. Left explicit rather than auto-detected, because the failure
+# mode is not a failure: ping and small requests work while image pulls, model
+# downloads and NCCL hang.
+MTU: 1400
+
+ipam:
+  mode: kubernetes
+
+# k3s does not lay CNI down where the upstream defaults look for it.
+cni:
+  binPath: /var/lib/rancher/k3s/data/cni
+  confPath: /var/lib/rancher/k3s/agent/etc/cni/net.d
+
+hubble:
+  relay:
+    enabled: true
+  ui:
+    enabled: false
+
+operator:
+  replicas: 2   # three control planes, so two is safe
+
+# NOTE after ANY change to these values: `kubectl rollout restart ds/cilium`.
+# A helm upgrade that only changes the ConfigMap rolls nothing, and
+# `kubectl rollout status ds/cilium` still prints "successfully rolled out"
+# while the old agent pod keeps running. Check the pod's AGE, not the message.

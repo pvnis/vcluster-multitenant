@@ -1,0 +1,16 @@
+# /etc/rancher/k3s/registries.yaml on all five nodes.
+#
+# The tyo site runs an insecure registry (phoenix-inventories:
+# docker_registry "deployment0:5000", docker_registry_insecure true). With more
+# than one GPU node the `docker save` + `k3s ctr images import` workflow used on
+# every previous single-node box stops being practical -- and `docker save`
+# silently emits blob-less stubs when docker uses the containerd image store,
+# which has already cost this project time. Push to the registry instead.
+mirrors:
+  "deployment0:5000":
+    endpoint:
+      - "http://deployment0:5000"
+configs:
+  "deployment0:5000":
+    tls:
+      insecure_skip_verify: true
