@@ -45,7 +45,8 @@
 #     --from-literal=RCLONE_CONFIG_RGW_ACCESS_KEY_ID=... \
 #     --from-literal=RCLONE_CONFIG_RGW_SECRET_ACCESS_KEY=... \
 #     --from-literal=TENANT_NV_A_KEY=tenant-nv-a,<random> \
-#     --from-literal=TENANT_NV_B_KEY=tenant-nv-b,<random>
+#     --from-literal=TENANT_NV_B_KEY=tenant-nv-b,<random> \
+#     --from-literal=TENANT_PHOENIX_KEY=tenant-phoenix,<random>
 # and in each vCluster, the matching half as default/s3-credentials
 # (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_ENDPOINT_URL).
 apiVersion: v1
@@ -75,10 +76,16 @@ spec:
         # The tenant key pairs. Kubernetes expands $(VAR) from the Secret.
         - --auth-key=$(TENANT_NV_A_KEY)
         - --auth-key=$(TENANT_NV_B_KEY)
+        - --auth-key=$(TENANT_PHOENIX_KEY)
         # rclone caches listings for 5 minutes by default, and an object
         # uploaded inside that window is NoSuchKey through the gateway while a
         # direct GET finds it (measured). Listings are cheap; keep this short.
         - --dir-cache-time=10s
+        # Without this rclone HEADs every object to read its mtime metadata,
+        # and RGW answers each request in about a second: listing Qwen3.5-4B
+        # (45 objects) took 50-71 s, past boto's read timeout, and KServe's
+        # storage-initializer failed on the listing. With it: 5.6-8 s.
+        - --use-server-modtime
         # RGW's certificate is signed by KollaTestCA, which nothing trusts.
         # Install that CA and drop this.
         - --no-check-certificate

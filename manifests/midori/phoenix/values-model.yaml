@@ -1,0 +1,44 @@
+# Phoenix Serving's model chart inside tenant-phoenix: Qwen3.5-4B as a gVisor
+# sandbox holding a slice of one A6000, with weights from RGW via the S3
+# gateway. Derived from gvisor/third-party-stack/values-tenant-gvisor.yaml
+# (vm-nv-dmd1); only deltas from the packaged profile are stated.
+#
+#   helm install phoenix-serving charts/phoenix-serving -n inference-serving \
+#     --create-namespace -f values-model.yaml          (tenant kubeconfig)
+#
+# Needs s3-credentials.sh run first (the Secret the storage-initializer uses).
+profiles:
+  qwen35-4b-nvidia-x1:
+    model:
+      # Not hf://: tenant workloads have no internet (the Cilium floor), and
+      # the chart's own downloader initContainer only speaks hf://. An
+      # explicit s3:// uri hands the download to KServe's storage-initializer,
+      # which takes the endpoint and key from the Secret attached to the
+      # namespace's default ServiceAccount (s3-credentials.sh).
+      uri: s3://models/Qwen/Qwen3.5-4B
+      downloader:
+        enabled: false
+    storage:
+      # No chart-managed cache: weights land in the pod's own volume on every
+      # start. midori has no RWX storage, and local-path would pin the model
+      # to one node; re-reading ~9.3 GB through the gateway is the price.
+      type: none
+    vllm:
+      # vCluster forces gvisor regardless (sync.toHost.pods.runtimeClassName);
+      # stated so the intent is visible here.
+      runtimeClassName: gvisor
+      resources:
+        requests:
+          # MiB of GPU memory. The webhook turns these into runsc flags, so
+          # vLLM's --gpu-memory-utilization=0.9 sizes against this slice.
+          nvidia.com/gpumem: "20480"
+          nvidia.com/gpucores: "60"
+        limits:
+          nvidia.com/gpumem: "20480"
+          nvidia.com/gpucores: "60"
+    # KServe's base preset asks the endpoint picker for 16Gi; the tenant quota
+    # and a 62 GiB node do not need to spend that on a router.
+    epp:
+      resources:
+        requests: { cpu: 500m, memory: 1Gi }
+        limits: { cpu: "2", memory: 4Gi }

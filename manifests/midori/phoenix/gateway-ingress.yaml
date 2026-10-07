@@ -1,0 +1,27 @@
+# Host side, in tenant-phoenix: lets clients outside the cluster reach Phoenix
+# Serving's Gateway on its NodePort.
+#
+#   kubectl apply -f gateway-ingress.yaml          (host kubeconfig)
+#
+# Every tenant namespace is default-deny ingress (tenant-netpol.yaml), and the
+# Gateway's Service is type LoadBalancer -- which stays <pending> without
+# Octavia (OPENSTACK-GAPS.md, item 2) -- so clients use its NodePort on any
+# node (31226 as created; vCluster lets the host choose it). A client that
+# lands on the gateway pod's own node arrives as `world`; via any other node it
+# arrives SNATed as `remote-node`. Port 8080 is the proxy's listener (the
+# Service's targetPort).
+#
+# Scope: the selector's managed-by label is written by the syncer and cannot
+# be forged, but gateway-name is the tenant's own label. A tenant can therefore
+# expose any of ITS OWN pods on 8080 this way -- never another tenant's.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata: { name: allow-gateway-ingress, namespace: tenant-phoenix }
+spec:
+  endpointSelector:
+    matchLabels:
+      vcluster.loft.sh/managed-by: tenant-phoenix
+      gateway.networking.k8s.io/gateway-name: phoenix-serving-gateway
+  ingress:
+  - fromEntities: [world, remote-node, host]
+    toPorts: [{ ports: [{ port: "8080", protocol: TCP }] }]

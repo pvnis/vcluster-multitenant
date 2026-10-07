@@ -15,8 +15,10 @@ built** wins.
     driver        610.43.02 open, gpuslicing 423ceb90, built on each GPU node
     runsc         gvisor gpuslicing e6a06cbce (runsc, shim, webhook), systrap
     HAMi          2.9.0, 20 nvidia.com/gpu per node
-    vCluster      0.36.1: tenant-nv-a (:31943, 4 GPUs), tenant-nv-b (:32043, 2 GPUs)
+    vCluster      0.36.1: tenant-nv-a (:31943, 4 GPUs), tenant-nv-b (:32043, 2 GPUs),
+                  tenant-phoenix (:32143, 2 GPUs; Phoenix Serving, see phoenix/)
                   kubeconfigs in ~/tenants/ on midori-cp-0
+    gaps          what the site is missing: OPENSTACK-GAPS.md
 
 ### Step 0, verified
 
