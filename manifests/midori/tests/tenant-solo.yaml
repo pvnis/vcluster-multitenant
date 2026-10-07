@@ -1,0 +1,19 @@
+# Solo baseline on the same GPU as tenant-share-75-25.yaml, at weight 25.
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: solo
+  annotations: { nvidia.com/use-gpuuuid: "GPU-7c366944-6c6b-b193-7512-22f46ff1e9b6" }
+spec:
+  schedulerName: hami-scheduler
+  restartPolicy: Never
+  containers:
+  - name: t
+    image: docker.io/pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime
+    command: ["python","/probe/gpuprobe.py"]
+    env: [{ name: MODE, value: matmul }, { name: SECONDS_, value: "20" }]
+    resources:
+      limits: { nvidia.com/gpu: 1, nvidia.com/gpumem: 20000, nvidia.com/gpucores: 25, cpu: "2", memory: 8Gi }
+    volumeMounts: [{ name: probe, mountPath: /probe }]
+  volumes: [{ name: probe, configMap: { name: gpuprobe } }]

@@ -1,0 +1,24 @@
+# Lets one tenant's workloads reach the S3 gateway (s3-gateway.yaml), and
+# nothing more.
+#
+#   sed s/TENANT/tenant-nv-a/g tenant-s3-allow.yaml | kubectl apply -f -
+#
+# ../cilium/tenant-allow.yaml already allows `cluster` on 443, but Cilium
+# checks L4 policy against the BACKEND port after service translation, so a
+# Service on 443 in front of a pod on 8080 would still be refused. This names
+# the gateway's pods and their real port instead. The floor does not deny it:
+# the gateway's namespace carries no `tenant` label and its pods sit inside the
+# pod CIDR the floor excepts.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata: { name: tenant-s3-gateway, namespace: TENANT }
+spec:
+  endpointSelector:
+    matchLabels:
+      vcluster.loft.sh/managed-by: TENANT
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: s3-gateway
+        app: s3-gateway
+    toPorts: [{ ports: [{ port: "8080", protocol: TCP }] }]

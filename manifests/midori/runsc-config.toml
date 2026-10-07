@@ -1,0 +1,19 @@
+# /etc/runsc/config.toml on midori-nv-0 and midori-nv-1 -- the ConfigPath that
+# containerd-10-runsc.toml points the shim at. It is decoded into
+# pkg/shim/v1/runsc.Options: runsc flags MUST sit under [runsc_config], or they
+# are dropped without a word.
+log_level = "info"
+[runsc_config]
+  nvproxy = "true"
+  # 610.43.02 is in nvproxy's table but unsupported; without this every GPU
+  # sandbox refuses to start.
+  nvproxy-allow-unsupported-driver = "true"
+  # Adds nvidia-container-runtime-hook as a prestart hook, which is what mounts
+  # libcuda and nvidia-smi into a CRI pod. Named for docker; needed for CRI.
+  nvproxy-docker = "true"
+  # Fail-closed: no GPU sandbox starts while runsc-gpu-scheduler is down.
+  nvproxy-gpu-scheduler-socket = "/run/runsc-gpu-scheduler.sock"
+  # Node CEILING for weight; the webhook narrows it per pod. Deliberately NO
+  # node-wide memory ceiling, so a whole-GPU pod gets the whole 46068 MiB.
+  nvproxy-gpu-weight = "100"
+  debug-log = "/var/log/runsc/%ID%/"

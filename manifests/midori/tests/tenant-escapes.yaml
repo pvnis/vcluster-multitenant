@@ -1,0 +1,36 @@
+# From inside tenant-nv-b: the two ways a tenant might try to get out.
+#   escape-rc     asks for runc (runtimeClassName: nvidia) and self-annotates a
+#                 48 GiB / weight-100 sandbox while requesting 10000 MiB / 20.
+#                 Expect: 4.19.0-gvisor, total 10000 MiB.
+#   over-quota    asks for 3 GPUs against a host quota of 2. Expect: the
+#                 tenant API accepts it, the host ResourceQuota refuses the
+#                 synced pod, and it never runs.
+#   kubectl --kubeconfig ~/tenants/tenant-nv-b.kubeconfig apply -f tenant-escapes.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: escape-rc
+  annotations: { dev.gvisor.flag.nvproxy-gpu-memory-limit: "51539607552", dev.gvisor.flag.nvproxy-gpu-weight: "100" }
+spec:
+  runtimeClassName: nvidia
+  schedulerName: hami-scheduler
+  restartPolicy: Never
+  containers:
+  - name: t
+    image: docker.io/pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime
+    command: ["sh","-c","uname -r; python -c \"import torch;f,t=torch.cuda.mem_get_info(0);print('total',t>>20,'MiB')\""]
+    resources:
+      limits: { nvidia.com/gpu: 1, nvidia.com/gpumem: 10000, nvidia.com/gpucores: 20, cpu: "2", memory: 8Gi }
+---
+apiVersion: v1
+kind: Pod
+metadata: { name: over-quota }
+spec:
+  schedulerName: hami-scheduler
+  restartPolicy: Never
+  containers:
+  - name: t
+    image: docker.io/pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime
+    command: ["sleep","60"]
+    resources:
+      limits: { nvidia.com/gpu: 3, nvidia.com/gpumem: 1000, cpu: "1", memory: 1Gi }

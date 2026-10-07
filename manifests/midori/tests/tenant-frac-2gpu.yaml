@@ -1,0 +1,40 @@
+# From inside tenant-nv-b: a fractional pod across BOTH A6000s of one node.
+# Per-device memory (gpumem is per device: 20000 MiB on each, not 10000), the
+# NVLink bridge as seen from the sandbox, and peer-to-peer over it.
+#   kubectl --kubeconfig ~/tenants/tenant-nv-b.kubeconfig apply -f tenant-frac-2gpu.yaml
+apiVersion: v1
+kind: Pod
+metadata: { name: frac-2gpu }
+spec:
+  schedulerName: hami-scheduler
+  restartPolicy: Never
+  containers:
+  - name: t
+    image: docker.io/pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime
+    command:
+    - sh
+    - -c
+    - |
+      uname -r; nvidia-smi topo -m | head -3
+      python - <<'PY'
+      import torch, time
+      M = 1 << 20
+      for i in range(torch.cuda.device_count()):
+          f, t = torch.cuda.mem_get_info(i); print(f"DEV{i} total={t//M} free={f//M} MiB")
+      print("P2P 0<->1:", torch.cuda.can_device_access_peer(0, 1))
+      x = torch.empty(1 << 30, dtype=torch.uint8, device=0)
+      for _ in range(3): y = x.to(1)
+      torch.cuda.synchronize(1); t0 = time.time()
+      for _ in range(20): y = x.to(1)
+      torch.cuda.synchronize(1); print(f"COPY 0->1 {20 / (time.time() - t0):.1f} GiB/s")
+      del x, y; torch.cuda.empty_cache()
+      a = [torch.empty(18000 * M, dtype=torch.uint8, device=i) for i in range(2)]
+      print("ALLOC 18000 MiB on each GPU: OK")
+      try:
+          b = torch.empty(5000 * M, dtype=torch.uint8, device=0)
+          print("ALLOC +5000 MiB on GPU0: ADMITTED (per-device limit NOT enforced)")
+      except torch.OutOfMemoryError:
+          print("ALLOC +5000 MiB on GPU0: refused (per-device limit enforced)")
+      PY
+    resources:
+      limits: { nvidia.com/gpu: 2, nvidia.com/gpumem: 20000, nvidia.com/gpucores: 50, cpu: "4", memory: 16Gi }

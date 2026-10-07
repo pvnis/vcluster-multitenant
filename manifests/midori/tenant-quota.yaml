@@ -1,0 +1,33 @@
+# Host-side quota for a midori tenant. ../tenant-quota.yaml explains every axis
+# (and why the gpu count, not gpumem, is what actually bounds a tenant); this
+# is that file sized for midori, parameterised like ../b300/tenant-quota.yaml:
+#
+#   sed -e s/NAMESPACE/tenant-nv-a/ -e s/GPUS/4/ -e s/GPUMEM/184272/ tenant-quota.yaml | kubectl apply -f -
+#   sed -e s/NAMESPACE/tenant-nv-b/ -e s/GPUS/2/ -e s/GPUMEM/92136/  tenant-quota.yaml | kubectl apply -f -
+#
+# midori has 4 A6000s at 46068 MiB. The GPU nodes are 16 vCPU / 62 GiB each
+# (the plan asked for >=32 / >=128), so CPU and memory are what will bind
+# first: the vLLM measurement in ../midori/README.md (14 GiB request / 20 GiB
+# limit for a 4B model) means about two model servers per tenant here.
+apiVersion: v1
+kind: ResourceQuota
+metadata: { name: tenant-quota, namespace: NAMESPACE }
+spec:
+  hard:
+    requests.nvidia.com/gpu: "GPUS"
+    requests.nvidia.com/gpumem: "GPUMEM"
+    requests.cpu: "12"
+    requests.memory: 48Gi
+    limits.cpu: "24"
+    limits.memory: 80Gi
+    pods: "30"
+    persistentvolumeclaims: "10"
+---
+apiVersion: v1
+kind: LimitRange
+metadata: { name: tenant-defaults, namespace: NAMESPACE }
+spec:
+  limits:
+  - type: Container
+    default: { cpu: "1", memory: 2Gi }
+    defaultRequest: { cpu: 100m, memory: 256Mi }

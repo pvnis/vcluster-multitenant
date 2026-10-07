@@ -1,0 +1,30 @@
+# Overlay for tenants on midori, after tenant.yaml and nv-tenant.yaml and before
+# the per-tenant port overlay:
+#   vcluster create tenant-nv-a -n tenant-nv-a --values tenant.yaml \
+#     --values nv-tenant.yaml --values midori-tenant.yaml --values tenant-nv-a.yaml
+#
+# The build plan expected midori to need no overlay. It needs one thing, and it
+# is the multi-node one: a tenant's NodePort answers on all five nodes, but
+# vCluster puts only the IP of the node its control plane landed on into the
+# serving certificate. Through any other node the network path works (Hubble
+# shows the remote-node flow allowed) and the client then fails with
+# "x509: certificate is valid for ... 10.30.30.54, not 10.30.30.226". On every
+# previous, single-node environment those were the same address.
+controlPlane:
+  proxy:
+    extraSANs:
+      - 10.30.30.31     # midori-cp-0
+      - 10.30.30.48     # midori-cp-1
+      - 10.30.30.142    # midori-cp-2
+      - 10.30.30.226    # midori-nv-0
+      - 10.30.30.54     # midori-nv-1
+
+# The read-only S3 gateway (manifests/midori/s3-gateway.yaml), visible inside
+# each tenant as s3-gateway.s3-gateway.svc.cluster.local. A tenant's own DNS
+# knows only its own Services, so without this the gateway has no name.
+# Reaching it also needs manifests/midori/tenant-s3-allow.yaml on the host.
+networking:
+  replicateServices:
+    fromHost:
+      - from: s3-gateway/s3-gateway
+        to: s3-gateway/s3-gateway

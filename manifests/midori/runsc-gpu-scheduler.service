@@ -1,0 +1,17 @@
+# /etc/systemd/system/runsc-gpu-scheduler.service -- one per GPU node. Each
+# node's scheduler divides only its own GPUs (one credit planner per GPU);
+# nothing coordinates across nodes.
+[Unit]
+Description=runsc GPU scheduler (runlist broker)
+After=nvidia-persistenced.service
+Before=k3s-agent.service
+
+[Service]
+ExecStart=/usr/local/bin/runsc gpu-scheduler --socket /run/runsc-gpu-scheduler.sock \
+    --measure-usage=false --runlist-control=/proc/driver/nvidia/gpusched
+# Fail-closed: GPU pods cannot start while this is down.
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,39 @@
+# From inside tenant-nv-a: two pods on ONE A6000 (midori-nv-0 GPU0, pinned by
+# UUID) at gpucores 75 and 25. Expect ~3:1 with the sum near solo.json's figure.
+#   kubectl --kubeconfig ~/tenants/tenant-nv-a.kubeconfig create cm gpuprobe --from-file=../../b300/gpuprobe.py
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: share-a
+  annotations: { nvidia.com/use-gpuuuid: "GPU-7c366944-6c6b-b193-7512-22f46ff1e9b6" }
+spec:
+  schedulerName: hami-scheduler
+  restartPolicy: Never
+  containers:
+  - name: t
+    image: docker.io/pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime
+    command: ["python","/probe/gpuprobe.py"]
+    env: [{ name: MODE, value: matmul }, { name: SECONDS_, value: "40" }]
+    resources:
+      limits: { nvidia.com/gpu: 1, nvidia.com/gpumem: 20000, nvidia.com/gpucores: 75, cpu: "2", memory: 8Gi }
+    volumeMounts: [{ name: probe, mountPath: /probe }]
+  volumes: [{ name: probe, configMap: { name: gpuprobe } }]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: share-b
+  annotations: { nvidia.com/use-gpuuuid: "GPU-7c366944-6c6b-b193-7512-22f46ff1e9b6" }
+spec:
+  schedulerName: hami-scheduler
+  restartPolicy: Never
+  containers:
+  - name: t
+    image: docker.io/pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime
+    command: ["python","/probe/gpuprobe.py"]
+    env: [{ name: MODE, value: matmul }, { name: SECONDS_, value: "40" }]
+    resources:
+      limits: { nvidia.com/gpu: 1, nvidia.com/gpumem: 20000, nvidia.com/gpucores: 25, cpu: "2", memory: 8Gi }
+    volumeMounts: [{ name: probe, mountPath: /probe }]
+  volumes: [{ name: probe, configMap: { name: gpuprobe } }]

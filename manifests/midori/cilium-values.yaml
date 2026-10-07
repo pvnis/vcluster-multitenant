@@ -3,12 +3,18 @@
 #
 # Install with k3s started as:
 #   --flannel-backend=none --disable-network-policy --disable-kube-proxy
-#   --disable=servicelb        (Octavia provides LoadBalancer)
-# and point k8sServiceHost at the API VIP, because with kube-proxy disabled the
-# agents cannot reach the API through a ClusterIP before Cilium is up.
+#   --disable=servicelb,traefik  (no Octavia credentials yet; see README "As built")
+# With kube-proxy disabled the agents cannot reach the API through a ClusterIP
+# before Cilium is up, so they need a host-reachable endpoint.
+#
+# As built there is no Octavia VIP (no OpenStack API credentials were provided),
+# so this points at k3s's own client-side load balancer, which listens on
+# 127.0.0.1:6444 on EVERY node -- servers included (checked with ss) -- and
+# fails over across all three API servers by itself. If an Octavia VIP is added
+# later, either endpoint works; this one has no extra hop.
 
-k8sServiceHost: "<API_VIP>"   # the Octavia VIP in front of midori-cp-0/1/2
-k8sServicePort: 6443
+k8sServiceHost: "127.0.0.1"
+k8sServicePort: 6444
 
 kubeProxyReplacement: true
 
@@ -26,11 +32,16 @@ socketLB:
   #   cilium-dbg status --verbose | grep "Socket LB Coverage"   -> Hostns-only
   hostNamespaceOnly: true
 
-# OpenStack tenant networks here are VXLAN (1450). Cilium's own VXLAN on top
-# needs headroom. Left explicit rather than auto-detected, because the failure
-# mode is not a failure: ping and small requests work while image pulls, model
-# downloads and NCCL hang.
-MTU: 1400
+# The plan assumed a VXLAN tenant network at 1450. As built, ens3 is 1500 and a
+# DF ping of 1472 bytes crosses between the VMs, so the path really is 1500 and
+# Cilium's VXLAN needs 50 of it. NOTE this key is the DEVICE MTU: Cilium
+# subtracts the tunnel overhead itself for pod routes, so MTU: 1450 here gave
+# pods `default ... mtu 1400` (measured), and the plan's 1400 would have given
+# 1350. Left explicit rather than auto-detected, because the failure mode is not
+# a failure: ping and small requests work while image pulls, model downloads and
+# NCCL hang. Verify with a DF ping of 1422 bytes between pods on different nodes
+# (and that 1423 is refused).
+MTU: 1500
 
 ipam:
   mode: kubernetes

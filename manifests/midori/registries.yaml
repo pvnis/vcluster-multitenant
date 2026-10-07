@@ -1,16 +1,19 @@
 # /etc/rancher/k3s/registries.yaml on all five nodes.
 #
-# The tyo site runs an insecure registry (phoenix-inventories:
-# docker_registry "deployment0:5000", docker_registry_insecure true). With more
-# than one GPU node the `docker save` + `k3s ctr images import` workflow used on
-# every previous single-node box stops being practical -- and `docker save`
-# silently emits blob-less stubs when docker uses the containerd image store,
-# which has already cost this project time. Push to the registry instead.
+# The plan pointed this at the tyo site registry, deployment0:5000, but that
+# name does not resolve from midori. As built, the registry is in-cluster
+# (registry.yaml here), stores its blobs in s3://midori/registry on RGW, and
+# is reached on every node through NodePort 30500 on loopback. Images are
+# referenced as registry.midori/<name>:<tag>; containerd rewrites that to the
+# loopback endpoint. Push from a node with: crane push --insecure ... 127.0.0.1:30500/<name>:<tag>
+#
+# The single-node `docker save` + `k3s ctr images import` workflow does not
+# scale past one GPU node, and `docker save` silently emits blob-less stubs
+# when docker uses the containerd image store -- push to the registry instead.
+#
+# Bootstrap caveat: the registry's own image comes from Docker Hub, so it can
+# never be served from here.
 mirrors:
-  "deployment0:5000":
+  "registry.midori":
     endpoint:
-      - "http://deployment0:5000"
-configs:
-  "deployment0:5000":
-    tls:
-      insecure_skip_verify: true
+      - "http://127.0.0.1:30500"

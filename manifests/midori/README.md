@@ -1,9 +1,139 @@
 # midori: a multi-node GPU cluster on OpenStack (phoenix/tyo)
 
-**Status: planned, not built.** Everything below is a build plan written from
-what the other environments taught, plus what `phoenix-inventories` and
-`gpu-infrastructure` say about the tyo site. Anything marked **VERIFY** has not
-been checked against live hardware and must be before it is trusted.
+**Status: built 2026-10-07.** The section directly below records what was
+built and measured, and where reality departed from the plan. Everything after
+it is the original build plan, kept as written; where the two disagree, **As
+built** wins.
+
+## As built (2026-10-07)
+
+    nodes         midori-cp-0/1/2  10.30.30.31 / .48 / .142   2 vCPU, 3 GiB, 19 GB
+                  midori-nv-0/1    10.30.30.226 / .54         16 vCPU, 62 GiB, 495 GB
+                  Ubuntu 24.04.3, 6.8.0-88-generic (held), all five
+    k3s           v1.36.5+k3s1, 3 servers (embedded etcd) + 2 agents
+    Cilium        1.19.8, KPR, Socket LB Coverage: Hostns-only (checked)
+    driver        610.43.02 open, gpuslicing 423ceb90, built on each GPU node
+    runsc         gvisor gpuslicing e6a06cbce (runsc, shim, webhook), systrap
+    HAMi          2.9.0, 20 nvidia.com/gpu per node
+    vCluster      0.36.1: tenant-nv-a (:31943, 4 GPUs), tenant-nv-b (:32043, 2 GPUs)
+                  kubeconfigs in ~/tenants/ on midori-cp-0
+
+### Step 0, verified
+
+- 0.1/0.2: both GPU VMs boot with two A6000s each (`10de:2230` at `00:05.0`
+  and `00:06.0`), so the flavor/alias question was settled by whoever
+  provisioned them. Host-side NUMA cannot be seen from the guest; the guest has
+  one NUMA node.
+- 0.3: **`NV4` on both nodes**, four links at 14.06 GB/s each. From inside a
+  tenant sandbox `nvidia-smi topo -m` shows `NV4` too, peer access is true, and
+  a 1 GiB device-to-device copy runs at **49.1 GiB/s**.
+
+### Where the plan did not survive
+
+1. **No Octavia, no cinder-csi.** No OpenStack API credentials were provided,
+   only RGW S3 keys. The API endpoint is k3s's own client-side load balancer
+   instead: it listens on `127.0.0.1:6444` on *every* node, servers included,
+   and `cilium-values.yaml` points there. The agents joined through cp-0 and
+   then learn all three servers. Storage is k3s `local-path`, so a vCluster
+   control plane is pinned to the node its PVC landed on. Both want an
+   OpenStack application credential to fix.
+2. **`deployment0:5000` does not resolve from midori.** The registry is
+   in-cluster (`registry.yaml`), stateless, with blobs in `s3://midori/registry`
+   on RGW. Nodes pull `registry.midori/<image>` via `127.0.0.1:30500`
+   (`registries.yaml`). Images are pushed with `crane` (no docker anywhere),
+   e.g. the webhook is `FROM scratch` + one static binary, assembled with
+   `crane append`. `registry:2.8.3`, not 3.x, whose AWS SDK sends checksum
+   headers older RGW rejects.
+3. **The RGW certificate is signed by `KollaTestCA`**, which nothing trusts.
+   The registry runs with `skipverify`; `s3cmd` on cp-0 has
+   `check_ssl_certificate = False`. Install that CA and turn both back on.
+4. **The MTU is 1500, not 1450**, and Cilium's `MTU` is the *device* MTU: it
+   subtracts the VXLAN overhead for pod routes itself. At `MTU: 1450` pods got
+   `mtu 1400` routes; the plan's 1400 would have given 1350. Now `MTU: 1500`,
+   pod routes 1450, a 1422-byte DF ping crosses nodes and 1423 is refused.
+5. **k3s writes no CNI block for containerd when flannel is off**, on every
+   node, not only the GPU nodes. All five sat NotReady (`cni plugin not
+   initialized`) with Cilium's conflist on disk until `containerd-00-cni.toml`
+   went in.
+6. **The site resolvers time out instead of answering NXDOMAIN** for missing
+   names under `projects.phoenix.tyo` (10.30.30.10 and .11, from every host).
+   Pods inherit that search domain, so every external name first stalls on
+   `<name>.projects.phoenix.tyo` and curl gives up. kubelet now gets
+   `/etc/rancher/k3s/resolv.conf` (nameservers only, `resolv-conf:` in each
+   node's k3s config), so pods search only cluster domains.
+7. **A tenant's serving certificate names only its own node.** Through any
+   other node's NodePort the network path works -- Hubble shows the
+   `remote-node` flow allowed -- and the client fails x509. So midori does need
+   an overlay after all: `../../values/midori-tenant.yaml`, carrying every node
+   IP as an `extraSAN`.
+8. **The host ingress policy is new.** `../tenant-netpol.yaml` admits the node
+   by ipBlock, which cannot match cross-node traffic here.
+   `tenant-netpol.yaml` in this directory admits the control plane's 8443 from
+   `world`/`remote-node`/`host` and 10250 from `remote-node` by
+   `CiliumNetworkPolicy`. Layered with `../cilium/tenant-floor.yaml` and
+   `../cilium/tenant-allow.yaml`, as `CILIUM-DESIGN.md` describes.
+9. Traefik is disabled, so nothing owns the Gateway API CRDs yet.
+10. VMs are smaller than planned (above); `tenant-quota.yaml` here is sized
+    for 16 vCPU / 62 GiB GPU nodes.
+
+### Results (all pods under runsc, `uname -r` = 4.19.0-gvisor)
+
+| test | result |
+| --- | --- |
+| host pod, 1 GPU, 40000 MiB / 50 cores | sees 40000 MiB; 112.7 TFLOPS bf16 |
+| tenant-nv-b, 2 GPUs × 20000 MiB (`tests/tenant-frac-2gpu.yaml`) | each GPU reports 20000; 18000 on each OK; +5000 on GPU0 refused |
+| same pod, NVLink | `NV4` in the sandbox, P2P true, 49.1 GiB/s copy |
+| tenant-nv-b asks runtimeClass `nvidia` + self-annotates 48 GiB / weight 100 | still gVisor; narrowed to 10000 MiB / weight 20 |
+| tenant-nv-b asks 3 GPUs (quota 2) | refused by the host ResourceQuota, never runs |
+| tenant-nv-a, 75/25 on one GPU (`tests/tenant-share-75-25.yaml`) | 83.4 : 31.3 TFLOPS = **2.66 : 1**, sum 114.7 vs solo 112.1 |
+| tenant API through each of the 5 nodes' NodePorts | all answer, both tenants |
+| intra-tenant pod to pod, incl. cross-node | 15/15 |
+| cross-tenant, both directions (one same-node, one cross-node) | 0/15 |
+| tenant pod to host API, node IP, internet | 0/15 each |
+| gVisor pod (host ns) to ClusterIP, DNS, internet | all work |
+
+The 75/25 pair started 2 s apart in a ~45 s run, which dilutes the ratio a
+little; B300 measured 2.8–3.0. Tenant workloads cannot reach the internet or
+RGW directly -- that is the Cilium floor working as designed.
+
+### Model weights: the read-only S3 gateway
+
+Tenants read weights through `s3-gateway.yaml`, an `rclone serve s3` pod that
+holds the project key and serves `s3://midori/models` read-only as a single
+bucket, `models`. Each tenant has its own key (Secret `default/s3-credentials`
+inside its vCluster; the halves are in `~/midori-build/s3keys/` on cp-0),
+reaches the pods through `tenant-s3-allow.yaml`, and resolves
+`s3-gateway.s3-gateway.svc.cluster.local` because `midori-tenant.yaml`
+replicates the Service in. The header of `s3-gateway.yaml` says why this
+instead of opening RGW in the floor. Upload weights from the host:
+`s3cmd put … s3://midori/models/<name>/`.
+
+| from inside each tenant (`tests/tenant-s3.yaml`, twice per tenant) | result |
+| --- | --- |
+| list buckets / objects | only `models`; its objects |
+| GET 64 MiB | sha256 matches the upload |
+| PUT, DELETE | refused |
+| `s3://registry` | not visible |
+| forged secret key | refused |
+| direct TCP to RGW (10.30.0.222:6780) | blocked |
+| object uploaded on the host, then fetched | visible at once (after `--dir-cache-time=10s`; the 5 min default made it `NoSuchKey`) |
+
+Throughput is bounded by RGW at about 8 MiB/s *per stream*, even direct. The
+gateway adds per-request latency, so it needs bigger ranges: 28–30 MiB/s with
+aws-cli defaults, 61–83 MiB/s with 16 × 64 MB (direct with defaults: 61–71).
+The table is in `s3-gateway.yaml`.
+
+The first run in tenant-nv-a failed to connect at all, right after both
+vCluster control planes had restarted for the Service replication; a fresh
+pod minutes later, and every run since, connected. Note that a test whose
+connections all fail also "passes" every refusal check; `tenant-s3.yaml`
+lists and downloads first for that reason.
+
+### Not yet done
+
+The things this cluster exists to prove (below, "What this cluster can prove")
+are untouched beyond the 75/25 check: a tenant spanning both GPU nodes, the
+`multigpu-shared` case on a bridged pair, and model weights on RGW.
 
 The multi-GPU counterpart to this is `../b300/README.md`, which is one 8× B300
 node and whose defects are all fixed. The single-A6000 counterpart is the

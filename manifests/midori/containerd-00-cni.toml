@@ -1,0 +1,12 @@
+# /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.d/00-cni.toml
+# on ALL FIVE nodes, control planes included.
+#
+# With --flannel-backend=none k3s writes no CNI block into containerd's config,
+# so containerd looks in /etc/cni/net.d and /opt/cni/bin while Cilium (with
+# cni.binPath/confPath from cilium-values.yaml) installs into k3s's own paths.
+# Every node then stays NotReady with "cni plugin not initialized" even though
+# 05-cilium.conflist is sitting on disk. The GPU nodes' 10-runsc.toml need not
+# repeat this.
+[plugins."io.containerd.cri.v1.runtime".cni]
+  bin_dirs = ["/var/lib/rancher/k3s/data/cni"]
+  conf_dir = "/var/lib/rancher/k3s/agent/etc/cni/net.d"

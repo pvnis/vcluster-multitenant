@@ -1,0 +1,123 @@
+# Read-only S3 gateway: how tenant workloads reach model weights on RGW.
+#
+# Tenant pods cannot reach RGW directly, by design: ../cilium/tenant-floor.yaml
+# denies tenant egress outside the pod and service CIDRs, and a deny beats
+# every allow. Carving RGW out of the floor was rejected for two reasons:
+#   - openstack-lab.phoenix.tyo (10.30.0.222) is the Kolla API VIP, not just
+#     RGW. A deny cannot be narrowed to "every port but 6780", and tenants can
+#     widen their own policies, so a tenant would reach Keystone, Nova and the
+#     rest.
+#   - The only credential is the project's. Any tenant holding it could read
+#     the other tenant's data and rewrite s3://midori/registry -- repoint an
+#     image tag the nodes pull.
+#
+# So this pod holds the project key and tenants get none. It serves
+# s3://midori/models READ-ONLY as one bucket named `models`, and nothing else in
+# the project bucket (registry/ included) is visible through it. Tenants reach
+# it on its pod IP, which the floor allows, through tenant-s3-allow.yaml (port
+# 8080 to these pods only), and by name through the Service that
+# ../../values/midori-tenant.yaml replicates into each vCluster:
+#
+#   AWS_ENDPOINT_URL=http://s3-gateway.s3-gateway.svc.cluster.local:8080
+#   aws s3 cp s3://models/<path> ...       (path-style; any region)
+#
+# Each tenant gets its own key pair (--auth-key), so a tenant's access can be
+# revoked alone. They all see the same read-only view: this is identification,
+# not per-tenant data isolation. That needs separate RGW users, which needs
+# OpenStack or RGW admin credentials.
+#
+# Writing weights is a host-side job (s3cmd/rclone with the project key).
+#
+# Throughput is set by RGW, not by this pod or by gVisor: ONE stream to RGW
+# gets about 8 MiB/s even direct, so everything depends on parallel ranges.
+# Measured with a 1 GiB object from midori-nv-0 (aws-cli 2.31):
+#   direct to RGW, aws defaults (10 x 8 MB)        61-71 MiB/s
+#   gateway,       aws defaults (10 x 8 MB)        28-30 MiB/s  (runc and gVisor alike)
+#   gateway,       32 x 8 MB                       36-40 MiB/s
+#   gateway,       16 x 64 MB                      61-83 MiB/s
+# The gateway adds per-request latency, which bigger ranges hide. Tell tenants:
+#   aws configure set default.s3.max_concurrent_requests 16
+#   aws configure set default.s3.multipart_chunksize 64MB
+# Shrinking rclone's --vfs-read-chunk-size made it worse (8M: 22 MiB/s).
+#
+# Secrets, created out of band (never commit them):
+#   kubectl -n s3-gateway create secret generic s3-gateway \
+#     --from-literal=RCLONE_CONFIG_RGW_ACCESS_KEY_ID=... \
+#     --from-literal=RCLONE_CONFIG_RGW_SECRET_ACCESS_KEY=... \
+#     --from-literal=TENANT_NV_A_KEY=tenant-nv-a,<random> \
+#     --from-literal=TENANT_NV_B_KEY=tenant-nv-b,<random>
+# and in each vCluster, the matching half as default/s3-credentials
+# (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_ENDPOINT_URL).
+apiVersion: v1
+kind: Namespace
+metadata: { name: s3-gateway }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: s3-gateway, namespace: s3-gateway }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: s3-gateway } }
+  template:
+    metadata: { labels: { app: s3-gateway } }
+    spec:
+      topologySpreadConstraints:
+      - { maxSkew: 1, topologyKey: kubernetes.io/hostname, whenUnsatisfiable: ScheduleAnyway, labelSelector: { matchLabels: { app: s3-gateway } } }
+      containers:
+      - name: rclone
+        image: rclone/rclone:1.75.1
+        args:
+        - serve
+        - s3
+        - "gw:"
+        - --addr=:8080
+        - --read-only
+        # The tenant key pairs. Kubernetes expands $(VAR) from the Secret.
+        - --auth-key=$(TENANT_NV_A_KEY)
+        - --auth-key=$(TENANT_NV_B_KEY)
+        # rclone caches listings for 5 minutes by default, and an object
+        # uploaded inside that window is NoSuchKey through the gateway while a
+        # direct GET finds it (measured). Listings are cheap; keep this short.
+        - --dir-cache-time=10s
+        # RGW's certificate is signed by KollaTestCA, which nothing trusts.
+        # Install that CA and drop this.
+        - --no-check-certificate
+        envFrom: [{ secretRef: { name: s3-gateway } }]
+        env:
+        - { name: RCLONE_CONFIG_RGW_TYPE, value: s3 }
+        - { name: RCLONE_CONFIG_RGW_PROVIDER, value: Ceph }
+        - { name: RCLONE_CONFIG_RGW_ENDPOINT, value: "https://openstack-lab.phoenix.tyo:6780" }
+        - { name: RCLONE_CONFIG_RGW_REGION, value: us-east-1 }
+        - { name: RCLONE_CONFIG_RGW_FORCE_PATH_STYLE, value: "true" }
+        # The served root: each upstream is one bucket a tenant sees. Add
+        # e.g. "datasets=rgw:midori/datasets" to expose another prefix.
+        - { name: RCLONE_CONFIG_GW_TYPE, value: combine }
+        - { name: RCLONE_CONFIG_GW_UPSTREAMS, value: "models=rgw:midori/models" }
+        ports: [{ containerPort: 8080 }]
+        readinessProbe: { tcpSocket: { port: 8080 } }
+        resources:
+          requests: { cpu: 100m, memory: 128Mi }
+          limits: { cpu: "2", memory: 1Gi }
+        securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true }
+        volumeMounts: [{ name: tmp, mountPath: /tmp }, { name: cache, mountPath: /root/.cache }]
+      volumes: [{ name: tmp, emptyDir: {} }, { name: cache, emptyDir: {} }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: s3-gateway, namespace: s3-gateway }
+spec:
+  selector: { app: s3-gateway }
+  ports: [{ port: 8080, targetPort: 8080 }]
+---
+# Only tenant namespaces (and the node, for probes) may connect.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata: { name: s3-gateway-ingress, namespace: s3-gateway }
+spec:
+  endpointSelector: { matchLabels: { app: s3-gateway } }
+  ingress:
+  - fromEndpoints:
+    - matchExpressions:
+      - { key: io.cilium.k8s.namespace.labels.tenant, operator: Exists }
+    toPorts: [{ ports: [{ port: "8080", protocol: TCP }] }]
+  - fromEntities: [host]

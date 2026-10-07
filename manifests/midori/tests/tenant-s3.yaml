@@ -1,0 +1,30 @@
+# From inside a tenant: model weights through the read-only S3 gateway.
+#   kubectl --kubeconfig ~/tenants/<tenant>.kubeconfig apply -f tenant-s3.yaml
+# Expect: only bucket `models` listed; the 64 MiB object downloads intact
+# (sha256 starts 61396b84cd8d30f2); upload, delete, a forged key and a direct
+# connection to RGW are all refused.
+apiVersion: v1
+kind: Pod
+metadata: { name: s3-test }
+spec:
+  restartPolicy: Never
+  containers:
+  - name: t
+    image: amazon/aws-cli:2.31.13
+    envFrom: [{ secretRef: { name: s3-credentials } }]
+    command:
+    - bash
+    - -c
+    - |
+      uname -r
+      echo "== buckets:"; aws s3 ls
+      echo "== models:"; aws s3 ls --recursive s3://models/
+      aws s3 cp --only-show-errors s3://models/smoke/blob.bin /tmp/blob.bin
+      echo "GET 64 MiB sha256 $(sha256sum /tmp/blob.bin | cut -c1-16)"
+      aws s3 cp --only-show-errors s3://models/smoke/README.txt -
+      echo x > /tmp/x
+      aws s3 cp --only-show-errors /tmp/x s3://models/smoke/x 2>/dev/null && echo "PUT: ADMITTED (bad)" || echo "PUT: refused"
+      aws s3 rm --only-show-errors s3://models/smoke/README.txt 2>/dev/null && echo "DELETE: ADMITTED (bad)" || echo "DELETE: refused"
+      aws s3 ls s3://registry/ >/dev/null 2>&1 && echo "registry: VISIBLE (bad)" || echo "registry: not visible"
+      AWS_SECRET_ACCESS_KEY=forged aws s3 ls s3://models/ >/dev/null 2>&1 && echo "forged key: ADMITTED (bad)" || echo "forged key: refused"
+      timeout 5 bash -c '</dev/tcp/10.30.0.222/6780' 2>/dev/null && echo "direct RGW: REACHABLE (bad)" || echo "direct RGW: blocked"

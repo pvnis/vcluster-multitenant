@@ -1,0 +1,11 @@
+# /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.d/10-runsc.toml on
+# the GPU nodes (the CNI paths are in 00-cni.toml, on every node).
+[plugins."io.containerd.cri.v1.runtime".containerd.runtimes.runsc]
+  runtime_type = "io.containerd.runsc.v1"
+  # WITHOUT THESE every dev.gvisor.flag.* annotation is dropped by CRI and each
+  # pod silently runs at the node-wide ceiling instead of its own quota.
+  pod_annotations = ["dev.gvisor.*"]
+  container_annotations = ["dev.gvisor.*"]
+[plugins."io.containerd.cri.v1.runtime".containerd.runtimes.runsc.options]
+  TypeUrl = "io.containerd.runsc.v1.options"
+  ConfigPath = "/etc/runsc/config.toml"

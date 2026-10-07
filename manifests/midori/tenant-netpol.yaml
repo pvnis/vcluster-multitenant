@@ -1,0 +1,48 @@
+# Host-side ingress isolation for a midori tenant namespace.
+#
+#   sed s/NAMESPACE/tenant-nv-a/ tenant-netpol.yaml | kubectl apply -f -
+#
+# ../tenant-netpol.yaml lets the node in with an ipBlock for its IP. That
+# cannot work here, and it is the multi-node caveat in README.md: midori has
+# five nodes, so a tenant's control plane is reached from OTHER nodes, and
+# Cilium resolves that traffic to the reserved remote-node identity before any
+# ipBlock is consulted. Only a CiliumNetworkPolicy can admit it (the shape of
+# ../tenant-cnp-amd.yaml). Traffic from the pod's own node is the `host`
+# identity, which Cilium admits by default (allow-localhost), so kubelet probes
+# need nothing here.
+#
+# Layered with ../cilium/tenant-floor.yaml (cluster-wide denies) and
+# ../cilium/tenant-allow.yaml (the workloads' baseline allow).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: default-deny-ingress, namespace: NAMESPACE }
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-same-tenant, namespace: NAMESPACE }
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels: { kubernetes.io/metadata.name: NAMESPACE }
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata: { name: allow-control-plane-access, namespace: NAMESPACE }
+spec:
+  endpointSelector:
+    matchLabels: { app: vcluster, release: NAMESPACE }
+  ingress:
+  # The tenant API on its NodePort. A client hitting the node that hosts the
+  # control plane arrives with its own address (world); via any other node it
+  # arrives SNATed to that node (remote-node). Both are the NodePort's purpose.
+  - fromEntities: [world, remote-node, host]
+    toPorts: [{ ports: [{ port: "8443", protocol: TCP }] }]
+  # The vCluster kubelet proxy (kubectl logs/exec), reached from other nodes.
+  - fromEntities: [remote-node]
+    toPorts: [{ ports: [{ port: "10250", protocol: TCP }] }]
