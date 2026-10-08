@@ -647,7 +647,7 @@
   },
   {
    "type": "timeseries",
-   "title": "GPU memory sliced out, by tenant",
+   "title": "GPU memory held, by tenant",
    "datasource": {
     "type": "prometheus",
     "uid": "prom"
@@ -669,7 +669,7 @@
      "displayMode": "table",
      "placement": "right",
      "calcs": [
-      "lastNotNull"
+      "last"
      ],
      "sortBy": "Name",
      "sortDesc": false
@@ -681,7 +681,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "sum by (namespace) (tenant:gpu_slice_mib)",
+     "expr": "sum by (namespace) (((max by (namespace, pod, container) (kube_pod_container_resource_limits{resource=\"nvidia_com_gpumem\", namespace=~\"tenant-.+\"}) * on (namespace, pod, container) max by (namespace, pod, container) (kube_pod_container_resource_limits{resource=\"nvidia_com_gpu\", namespace=~\"tenant-.+\"})) or on (namespace, pod, container) max by (namespace, pod, container) (kube_pod_container_resource_limits{resource=\"nvidia_com_gpu\", namespace=~\"tenant-.+\"}) * 46068) * on (namespace, pod) group_left () max by (namespace, pod) (kube_pod_status_phase{phase=\"Running\", namespace=~\"tenant-.+\"} == 1))",
      "legendFormat": "{{namespace}}",
      "datasource": {
       "type": "prometheus",
@@ -689,7 +689,7 @@
      }
     }
    ],
-   "description": "Sum of nvidia.com/gpumem limits; compare with physical use above.",
+   "description": "What each tenant's running pods hold: slices (nvidia.com/gpumem x GPUs) plus whole cards at 46068 MiB each. Deduplicated across kube-state-metrics restarts. Compare with physical use (GPU memory used) above.",
    "id": 15,
    "gridPos": {
     "x": 16,

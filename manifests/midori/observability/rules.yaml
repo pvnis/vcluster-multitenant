@@ -58,6 +58,10 @@ spec:
       labels: { severity: critical }
       annotations: { summary: "vCluster control plane {{ $labels.statefulset }} is not ready" }
   # --------------------------------------------------------------- tenant
+  # (GPU memory held and GPU weights are queried directly from
+  # kube-state-metrics by the dashboards -- see dashboards/build.py
+  # gpu_alloc() -- so their history is complete, not only since a rule.)
+  #
   # Everything a tenant may see carries `namespace` = its host namespace,
   # because prom-label-proxy pins tenant queries on that label. These
   # re-key Hubble's per-end labels onto `namespace` and drop the other end,
@@ -77,7 +81,3 @@ spec:
           or
           label_replace(rate(hubble_policy_verdicts_total{action="dropped", direction="ingress", destination=~"tenant-.+"}[5m]), "namespace", "$1", "destination", "(.+)")
         )
-    - record: tenant:gpu_slice_mib
-      expr: sum by (namespace, pod) (kube_pod_container_resource_limits{resource="nvidia_com_gpumem", namespace=~"tenant-.+"})
-    - record: tenant:gpu_weight
-      expr: sum by (namespace, pod) (kube_pod_container_resource_limits{resource="nvidia_com_gpucores", namespace=~"tenant-.+"})

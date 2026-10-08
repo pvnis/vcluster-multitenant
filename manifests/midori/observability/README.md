@@ -29,7 +29,11 @@ tenant cannot forge. Both are used as the tenant key.
 Not shown to tenants, on purpose: node metrics, physical GPU utilisation
 (dcgm-exporter) and the slicing broker. A card's utilisation includes every
 tenant on it, so it would tell a tenant how busy its neighbours are. Tenants
-get their own slice (`tenant:gpu_slice_mib`, `tenant:gpu_weight`) instead.
+get what their own pods hold instead: GPU memory held (a slice's
+`nvidia.com/gpumem` on each of its GPUs, or a whole card's full memory for
+pods holding whole GPUs) and GPU time weight, queried straight from
+kube-state-metrics (`dashboards/build.py`, `gpu_alloc()`), running pods only
+and de-duplicated across kube-state-metrics restarts.
 Cilium drops are re-keyed onto `namespace` by `rules.yaml` with the far end
 removed, so a tenant sees that it was probed but not by whom.
 

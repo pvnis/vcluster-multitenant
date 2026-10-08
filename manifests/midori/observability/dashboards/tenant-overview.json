@@ -373,7 +373,7 @@
   },
   {
    "type": "timeseries",
-   "title": "GPU memory slice",
+   "title": "GPU memory held",
    "datasource": {
     "type": "prometheus",
     "uid": "prom"
@@ -384,7 +384,7 @@
      "custom": {
       "fillOpacity": 10,
       "stacking": {
-       "mode": "none"
+       "mode": "normal"
       }
      }
     },
@@ -407,7 +407,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "tenant:gpu_slice_mib * on (namespace, pod) group_left (vpod) label_replace(max by (namespace, pod, annotation_vcluster_loft_sh_object_name) (kube_pod_annotations{annotation_vcluster_loft_sh_object_name!=\"\"}), \"vpod\", \"$1\", \"annotation_vcluster_loft_sh_object_name\", \"(.+)\")",
+     "expr": "sum by (namespace, pod) (((max by (namespace, pod, container) (kube_pod_container_resource_limits{resource=\"nvidia_com_gpumem\", namespace=~\"tenant-.+\"}) * on (namespace, pod, container) max by (namespace, pod, container) (kube_pod_container_resource_limits{resource=\"nvidia_com_gpu\", namespace=~\"tenant-.+\"})) or on (namespace, pod, container) max by (namespace, pod, container) (kube_pod_container_resource_limits{resource=\"nvidia_com_gpu\", namespace=~\"tenant-.+\"}) * 46068) * on (namespace, pod) group_left () max by (namespace, pod) (kube_pod_status_phase{phase=\"Running\", namespace=~\"tenant-.+\"} == 1)) * on (namespace, pod) group_left (vpod) label_replace(max by (namespace, pod, annotation_vcluster_loft_sh_object_name) (kube_pod_annotations{annotation_vcluster_loft_sh_object_name!=\"\"}), \"vpod\", \"$1\", \"annotation_vcluster_loft_sh_object_name\", \"(.+)\")",
      "legendFormat": "{{vpod}}",
      "datasource": {
       "type": "prometheus",
@@ -415,7 +415,7 @@
      }
     }
    ],
-   "description": "nvidia.com/gpumem per pod: the sandbox sees exactly this much GPU memory, and allocations past it are refused by gVisor.",
+   "description": "Per running pod: a slice (nvidia.com/gpumem) counts its GPU memory on each of its GPUs; a pod holding whole GPUs counts each card's full memory. Inside a slice the sandbox sees exactly that much, and allocations past it are refused by gVisor.",
    "id": 11,
    "gridPos": {
     "x": 0,
@@ -460,7 +460,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "tenant:gpu_weight * on (namespace, pod) group_left (vpod) label_replace(max by (namespace, pod, annotation_vcluster_loft_sh_object_name) (kube_pod_annotations{annotation_vcluster_loft_sh_object_name!=\"\"}), \"vpod\", \"$1\", \"annotation_vcluster_loft_sh_object_name\", \"(.+)\")",
+     "expr": "sum by (namespace, pod) (max by (namespace, pod, container) (kube_pod_container_resource_limits{resource=\"nvidia_com_gpucores\", namespace=~\"tenant-.+\"}) * on (namespace, pod) group_left () max by (namespace, pod) (kube_pod_status_phase{phase=\"Running\", namespace=~\"tenant-.+\"} == 1)) * on (namespace, pod) group_left (vpod) label_replace(max by (namespace, pod, annotation_vcluster_loft_sh_object_name) (kube_pod_annotations{annotation_vcluster_loft_sh_object_name!=\"\"}), \"vpod\", \"$1\", \"annotation_vcluster_loft_sh_object_name\", \"(.+)\")",
      "legendFormat": "{{vpod}}",
      "datasource": {
       "type": "prometheus",
@@ -468,7 +468,7 @@
      }
     }
    ],
-   "description": "nvidia.com/gpucores per pod: its share of GPU time against neighbours on the same card, re-divided every period; an idle neighbour costs you nothing.",
+   "description": "nvidia.com/gpucores per running pod: its share of GPU time against neighbours on the same card, re-divided every period; an idle neighbour costs you nothing. 100 = the whole card.",
    "id": 12,
    "gridPos": {
     "x": 8,

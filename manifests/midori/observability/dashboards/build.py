@@ -34,6 +34,21 @@ GPU_INDEX = ('* on (nodename, bus) group_left (gpu) (label_replace(label_replace
              'max by (hostname, pci_bus_id, gpu) (DCGM_FI_DEV_FB_USED), "nodename", "$1", "hostname", "(.+)"), '
              '"bus", "$1", "pci_bus_id", "0+:(.+)") * 0 + 1)')
 
+# GPU memory a pod HOLDS, per (namespace, pod): a slice counts its
+# nvidia.com/gpumem (per device) x its GPUs; a pod with GPUs but no gpumem
+# holds whole cards, counted at a card's full memory. Running pods only, and
+# max-by-labels first so two kube-state-metrics instances during a restart
+# cannot double-count (they did: 41 GB spikes for one 20 GiB pod).
+CARD_MIB = 46068  # RTX A6000; change if the cards change
+def gpu_alloc(by):
+    lim = lambda r: f'max by (namespace, pod, container) (kube_pod_container_resource_limits{{resource="{r}", namespace=~"tenant-.+"}})'
+    return (f'sum by ({by}) ((({lim("nvidia_com_gpumem")} * on (namespace, pod, container) {lim("nvidia_com_gpu")}) '
+            f'or on (namespace, pod, container) {lim("nvidia_com_gpu")} * {CARD_MIB}) '
+            f'* on (namespace, pod) group_left () max by (namespace, pod) (kube_pod_status_phase{{phase="Running", namespace=~"tenant-.+"}} == 1))')
+def per_pod_running(resource):
+    return (f'sum by (namespace, pod) (max by (namespace, pod, container) (kube_pod_container_resource_limits{{resource="{resource}", namespace=~"tenant-.+"}}) '
+            f'* on (namespace, pod) group_left () max by (namespace, pod) (kube_pod_status_phase{{phase="Running", namespace=~"tenant-.+"}} == 1))')
+
 # Host pod name -> the tenant's own pod name, via kube-state-metrics.
 VPOD = ('* on (namespace, pod) group_left (vpod) '
         'label_replace(max by (namespace, pod, annotation_vcluster_loft_sh_object_name) '
@@ -71,14 +86,14 @@ class Board:
                 "templating": {"list": list(variables)}, "panels": self.panels}
 
 
-def ts(title, targets, unit="short", ds=PROM, stack=False, desc=None):
+def ts(title, targets, unit="short", ds=PROM, stack=False, desc=None, legend_calc="lastNotNull"):
     p = {"type": "timeseries", "title": title, "datasource": ds,
          "fieldConfig": {"defaults": {"unit": unit, "custom": {"fillOpacity": 10,
                          "stacking": {"mode": "normal" if stack else "none"}}}, "overrides": []},
          # Legend sorted by series name by default, so "midori-nv-0 gpu0" comes
          # before "midori-nv-0 gpu1" before "midori-nv-1 gpu0" -- node, then GPU.
          # Without it the order is whatever Prometheus returns.
-         "options": {"legend": {"displayMode": "table", "placement": "right", "calcs": ["lastNotNull"],
+         "options": {"legend": {"displayMode": "table", "placement": "right", "calcs": [legend_calc],
                                 "sortBy": "Name", "sortDesc": False},
                      "tooltip": {"mode": "multi"}},
          "targets": [{"refId": chr(65 + i), "expr": e, "legendFormat": l, "datasource": ds}
@@ -155,12 +170,13 @@ def tenant_overview():
            (12, table("Pods not running", f'(sum by (namespace, pod, phase) (kube_pod_status_phase{{phase!~"Running|Succeeded"}}) > 0) {VPOD} {sel}',
                       rename={"vpod": "pod (yours)", "pod": "pod (host)"}))])
     b.row("GPU (your slices; the card itself is shared and not shown)")
-    b.add([(8, ts("GPU memory slice", [(f'tenant:gpu_slice_mib {VPOD}', "{{vpod}}")], unit="decmbytes",
-                  desc="nvidia.com/gpumem per pod: the sandbox sees exactly this much GPU memory, and "
-                       "allocations past it are refused by gVisor.")),
-           (8, ts("GPU time weight", [(f'tenant:gpu_weight {VPOD}', "{{vpod}}")],
-                  desc="nvidia.com/gpucores per pod: its share of GPU time against neighbours on the same card, "
-                       "re-divided every period; an idle neighbour costs you nothing.")),
+    b.add([(8, ts("GPU memory held", [(f'{gpu_alloc("namespace, pod")} {VPOD}', "{{vpod}}")], unit="decmbytes", stack=True,
+                  desc="Per running pod: a slice (nvidia.com/gpumem) counts its GPU memory on each of its GPUs; a pod "
+                       "holding whole GPUs counts each card's full memory. Inside a slice the sandbox sees exactly that "
+                       "much, and allocations past it are refused by gVisor.")),
+           (8, ts("GPU time weight", [(f'{per_pod_running("nvidia_com_gpucores")} {VPOD}', "{{vpod}}")],
+                  desc="nvidia.com/gpucores per running pod: its share of GPU time against neighbours on the same card, "
+                       "re-divided every period; an idle neighbour costs you nothing. 100 = the whole card.")),
            (8, stat("Devices held", 'sum(kube_pod_container_resource_limits{resource="nvidia_com_gpu"})', legend="GPUs"))])
     b.row("Network (Cilium)")
     b.add([(12, ts("Dropped packets from your pods", [('tenant:network_drops:rate5m', "{{reason}} {{protocol}}")], unit="pps",
@@ -221,8 +237,11 @@ def admin():
                                           (f'sum by (instance) (rate(gpusched_cmds_failed_total[5m])) {NODENAME}', "failed {{nodename}}"),
                                           (f'sum by (instance) (rate(gpusched_restarts_teardown_total[5m])) {NODENAME}', "teardown restarts {{nodename}}")])),
            (8, ts("Sandboxes per GPU (broker)", [(f'label_replace(gpusched_sandboxes {NODENAME}, "bus", "$1", "pci", "0+:(.+)") {GPU_INDEX}', "{{nodename}} gpu{{gpu}}")])),
-           (8, ts("GPU memory sliced out, by tenant", [('sum by (namespace) (tenant:gpu_slice_mib)', "{{namespace}}")],
-                  unit="decmbytes", stack=True, desc="Sum of nvidia.com/gpumem limits; compare with physical use above."))])
+           (8, ts("GPU memory held, by tenant", [(gpu_alloc("namespace"), "{{namespace}}")],
+                  unit="decmbytes", stack=True, legend_calc="last",
+                  desc="What each tenant's running pods hold: slices (nvidia.com/gpumem x GPUs) plus whole cards at "
+                       f"{CARD_MIB} MiB each. Deduplicated across kube-state-metrics restarts. Compare with physical "
+                       "use (GPU memory used) above."))])
     b.row("Tenants")
     b.add([(12, table("Quota use by tenant",
                       'max by (namespace, resource) (kube_resourcequota{type="used", namespace=~"tenant-.+"}) / on (namespace, resource) max by (namespace, resource) (kube_resourcequota{type="hard", namespace=~"tenant-.+"})',
