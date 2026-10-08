@@ -1,0 +1,83 @@
+# Alerts for the parts of midori that fail silently, and the recording rules
+# behind the tenant view.
+#   kubectl apply -f rules.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata: { name: midori, namespace: observability }
+spec:
+  groups:
+  # ---------------------------------------------------------------- admin
+  - name: midori-gpu-slicing
+    rules:
+    # The B300 defect-1 shape: the driver broker's group table is full, new
+    # contexts are not tracked, and time-slicing silently stops being
+    # enforced (a 75/25 pair measured 645:644). Nothing else logs it.
+    - alert: GpuBrokerTableFull
+      expr: increase(gpusched_table_full_total[10m]) > 0
+      labels: { severity: critical }
+      annotations:
+        summary: "GPU broker group table full on {{ $labels.instance }}: time-slicing is NOT being enforced for new contexts"
+    - alert: GpuBrokerRefusing
+      expr: increase(gpusched_refused_total[10m]) > 0 or increase(gpusched_cmds_failed_total[10m]) > 0
+      labels: { severity: warning }
+      annotations:
+        summary: "GPU broker on {{ $labels.instance }} refused or failed commands"
+    - alert: GpuBrokerStatsStale
+      expr: |
+        (time() - node_textfile_mtime_seconds{file=~".*gpusched.prom"} > 120)
+        or (gpusched_up == 0)
+      for: 2m
+      labels: { severity: warning }
+      annotations:
+        summary: "No fresh GPU broker stats from {{ $labels.instance }} (gpusched-textfile.timer, or the driver lost /proc/driver/nvidia/gpusched)"
+    # Fail-closed by design: no GPU pod starts on this node while it is down.
+    - alert: RunscGpuSchedulerDown
+      expr: midori_systemd_unit_active{unit="runsc-gpu-scheduler"} == 0
+      for: 1m
+      labels: { severity: critical }
+      annotations:
+        summary: "runsc-gpu-scheduler is down on {{ $labels.instance }}: GPU pods cannot start there"
+    # failurePolicy: Fail -- no pod in a gvisor-labelled namespace can be
+    # created while the quota webhook is unavailable.
+    - alert: GvisorQuotaWebhookDown
+      expr: kube_deployment_status_replicas_available{namespace="e2e", deployment="gvisor-webhook"} < 1
+      for: 1m
+      labels: { severity: critical }
+      annotations:
+        summary: "gVisor quota webhook unavailable: tenant pod creation is blocked (fails closed)"
+  - name: midori-platform
+    rules:
+    - alert: S3GatewayDown
+      expr: sum(kube_deployment_status_replicas_available{namespace="s3-gateway", deployment="s3-gateway"}) < 1
+      for: 2m
+      labels: { severity: warning }
+      annotations: { summary: "S3 gateway has no ready replica: tenants cannot load model weights" }
+    - alert: TenantControlPlaneNotReady
+      expr: kube_statefulset_status_replicas_ready{statefulset=~"tenant-.*"} < 1
+      for: 3m
+      labels: { severity: critical }
+      annotations: { summary: "vCluster control plane {{ $labels.statefulset }} is not ready" }
+  # --------------------------------------------------------------- tenant
+  # Everything a tenant may see carries `namespace` = its host namespace,
+  # because prom-label-proxy pins tenant queries on that label. These
+  # re-key Hubble's per-end labels onto `namespace` and drop the other end,
+  # so a tenant sees its own drops but never which tenant probed it.
+  - name: midori-tenant-view
+    interval: 30s
+    rules:
+    - record: tenant:network_drops:rate5m
+      expr: |
+        sum by (namespace, reason, protocol) (
+          label_replace(rate(hubble_drop_total{source=~"tenant-.+"}[5m]), "namespace", "$1", "source", "(.+)")
+        )
+    - record: tenant:policy_denied:rate5m
+      expr: |
+        sum by (namespace, direction) (
+          label_replace(rate(hubble_policy_verdicts_total{action="dropped", direction="egress", source=~"tenant-.+"}[5m]), "namespace", "$1", "source", "(.+)")
+          or
+          label_replace(rate(hubble_policy_verdicts_total{action="dropped", direction="ingress", destination=~"tenant-.+"}[5m]), "namespace", "$1", "destination", "(.+)")
+        )
+    - record: tenant:gpu_slice_mib
+      expr: sum by (namespace, pod) (kube_pod_container_resource_limits{resource="nvidia_com_gpumem", namespace=~"tenant-.+"})
+    - record: tenant:gpu_weight
+      expr: sum by (namespace, pod) (kube_pod_container_resource_limits{resource="nvidia_com_gpucores", namespace=~"tenant-.+"})

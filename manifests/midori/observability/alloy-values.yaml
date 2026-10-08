@@ -1,0 +1,131 @@
+# Grafana Alloy (chart grafana/alloy 1.13.0) as a DaemonSet on all six nodes,
+# shipping logs to Loki (loki-values.yaml), each stream to a Loki TENANT:
+#   - pods the vCluster syncer stamped vcluster.loft.sh/managed-by=<t>
+#     -> Loki tenant <t>. The label is written by the syncer and cannot be
+#     forged by a tenant, so a tenant cannot push into another's logs.
+#   - everything else -> `platform`: system namespaces, and also the vCluster
+#     control-plane pods, which carry no managed-by label and log host-side
+#     detail (host namespaces, quota errors) that is the admin's business.
+#   - k3s, runsc-gpu-scheduler, nvidia-persistenced from the journal -> platform.
+# Files are read from /var/log/pods on each node rather than streamed through
+# the API server, which the 3 GiB control planes would feel.
+#
+#   helm upgrade --install alloy grafana/alloy --version 1.13.0 -n observability -f alloy-values.yaml
+controller:
+  type: daemonset
+  tolerations: [{ operator: Exists }]
+alloy:
+  mounts: { varlog: true }
+  extraEnv:
+    - name: NODE_NAME
+      valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+  resources:
+    requests: { cpu: 20m, memory: 64Mi }
+    limits: { memory: 512Mi }   # measured 165Mi idle
+  configMap:
+    content: |
+      discovery.kubernetes "pods" {
+        role = "pod"
+        selectors {
+          role  = "pod"
+          field = "spec.nodeName=" + sys.env("NODE_NAME")
+        }
+      }
+
+      discovery.relabel "pods" {
+        targets = discovery.kubernetes.pods.targets
+        rule {
+          source_labels = ["__meta_kubernetes_pod_uid", "__meta_kubernetes_pod_container_name"]
+          separator     = "/"
+          target_label  = "__path__"
+          replacement   = "/var/log/pods/*$1/*.log"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+        // The names the tenant itself uses.
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_vcluster_loft_sh_namespace"]
+          target_label  = "vnamespace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_annotation_vcluster_loft_sh_object_name"]
+          target_label  = "vpod"
+        }
+        // Loki tenant: `platform` unless the syncer stamped the pod.
+        rule {
+          target_label = "tenant_id"
+          replacement  = "platform"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_vcluster_loft_sh_managed_by"]
+          regex         = "(.+)"
+          target_label  = "tenant_id"
+        }
+      }
+
+      local.file_match "pods" {
+        path_targets = discovery.relabel.pods.output
+      }
+
+      loki.source.file "pods" {
+        targets    = local.file_match.pods.targets
+        forward_to = [loki.process.pods.receiver]
+      }
+
+      loki.process "pods" {
+        stage.cri { }
+        stage.tenant { label = "tenant_id" }
+        stage.label_drop { values = ["tenant_id", "filename"] }
+        forward_to = [loki.write.default.receiver]
+      }
+
+      // Units are selected here by relabel rather than with `matches`, which
+      // keeps the selection in one readable place.
+      loki.relabel "journal" {
+        forward_to = []
+        rule {
+          source_labels = ["__journal__systemd_unit"]
+          regex         = "(k3s|k3s-agent|runsc-gpu-scheduler|nvidia-persistenced)\\.service"
+          action        = "keep"
+        }
+        rule {
+          source_labels = ["__journal__systemd_unit"]
+          target_label  = "unit"
+        }
+        rule {
+          source_labels = ["__journal__hostname"]
+          target_label  = "node"
+        }
+      }
+
+      // `path` must be explicit. Left empty, the reader opens the "local"
+      // journal, chosen by the CONTAINER's /etc/machine-id -- which is not the
+      // host's -- and reads nothing while reporting healthy. Same libsystemd
+      // (255) as the host, root, file readable: it was the machine id.
+      loki.source.journal "units" {
+        path          = "/var/log/journal"
+        relabel_rules = loki.relabel.journal.rules
+        labels        = { job = "journal" }
+        forward_to    = [loki.process.journal.receiver]
+      }
+
+      loki.process "journal" {
+        stage.tenant { value = "platform" }
+        forward_to = [loki.write.default.receiver]
+      }
+
+      loki.write "default" {
+        endpoint {
+          url = "http://loki.observability.svc.cluster.local:3100/loki/api/v1/push"
+        }
+      }

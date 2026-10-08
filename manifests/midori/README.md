@@ -18,6 +18,10 @@ built** wins.
     vCluster      0.36.1: tenant-nv-a (:31943, 4 GPUs), tenant-nv-b (:32043, 2 GPUs),
                   tenant-phoenix (:32143, 2 GPUs; Phoenix Serving, see phoenix/)
                   kubeconfigs in ~/tenants/ on midori-cp-0
+    observability midori-eye-0 (10.30.30.204): Prometheus, Loki, Grafana :30300,
+                  an admin view and one view per tenant -- see observability/
+    platform      platform-guard.yaml: tenants cannot connect into non-tenant
+                  namespaces (found while building observability/)
     gaps          what the site is missing: OPENSTACK-GAPS.md
 
 ### Step 0, verified

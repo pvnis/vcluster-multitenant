@@ -51,14 +51,38 @@ cni:
   binPath: /var/lib/rancher/k3s/data/cni
   confPath: /var/lib/rancher/k3s/agent/etc/cni/net.d
 
+# Metrics for observability/ (Prometheus on midori-eye-0).
+prometheus:
+  enabled: true
+  serviceMonitor: { enabled: true }
+# Dashboard ConfigMaps (label grafana_dashboard) for the admin Grafana org.
+dashboards: { enabled: true, namespace: kube-system }
+
 hubble:
   relay:
     enabled: true
   ui:
     enabled: false
+  metrics:
+    serviceMonitor: { enabled: true }
+    dashboards: { enabled: true, namespace: kube-system }
+    # Namespace context on both ends, so drops and policy verdicts can be
+    # attributed to a tenant (its host namespace). The tenant view re-labels
+    # these to `namespace` and keeps only its own side -- see
+    # observability/rules.yaml -- so a tenant never learns who probed it.
+    enabled:
+      - dns
+      - "drop:sourceContext=namespace;destinationContext=namespace"
+      - "policy:sourceContext=namespace|reserved-identity;destinationContext=namespace|reserved-identity"
+      - "flow:sourceContext=namespace;destinationContext=namespace"
+      - tcp
 
 operator:
   replicas: 2   # three control planes, so two is safe
+  prometheus:
+    enabled: true
+    serviceMonitor: { enabled: true }
+  dashboards: { enabled: true, namespace: kube-system }
 
 # NOTE after ANY change to these values: `kubectl rollout restart ds/cilium`.
 # A helm upgrade that only changes the ConfigMap rolls nothing, and

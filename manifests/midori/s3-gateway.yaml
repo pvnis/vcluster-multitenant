@@ -89,6 +89,8 @@ spec:
         # RGW's certificate is signed by KollaTestCA, which nothing trusts.
         # Install that CA and drop this.
         - --no-check-certificate
+        # Prometheus (observability/scrape.yaml).
+        - --metrics-addr=:9250
         envFrom: [{ secretRef: { name: s3-gateway } }]
         env:
         - { name: RCLONE_CONFIG_RGW_TYPE, value: s3 }
@@ -100,7 +102,7 @@ spec:
         # e.g. "datasets=rgw:midori/datasets" to expose another prefix.
         - { name: RCLONE_CONFIG_GW_TYPE, value: combine }
         - { name: RCLONE_CONFIG_GW_UPSTREAMS, value: "models=rgw:midori/models" }
-        ports: [{ containerPort: 8080 }]
+        ports: [{ containerPort: 8080 }, { name: metrics, containerPort: 9250 }]
         readinessProbe: { tcpSocket: { port: 8080 } }
         resources:
           requests: { cpu: 100m, memory: 128Mi }
@@ -128,3 +130,8 @@ spec:
       - { key: io.cilium.k8s.namespace.labels.tenant, operator: Exists }
     toPorts: [{ ports: [{ port: "8080", protocol: TCP }] }]
   - fromEntities: [host]
+  - fromEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: observability
+        app.kubernetes.io/name: prometheus
+    toPorts: [{ ports: [{ port: "9250", protocol: TCP }] }]

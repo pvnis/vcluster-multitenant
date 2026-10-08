@@ -1,0 +1,677 @@
+{
+ "uid": "tenant-overview",
+ "title": "Tenant overview",
+ "tags": [
+  "midori",
+  "tenant"
+ ],
+ "schemaVersion": 39,
+ "editable": true,
+ "time": {
+  "from": "now-6h",
+  "to": "now"
+ },
+ "refresh": "30s",
+ "templating": {
+  "list": [
+   {
+    "type": "query",
+    "name": "vnamespace",
+    "label": "Namespace",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "prom"
+    },
+    "query": {
+     "query": "label_values(kube_pod_labels{label_vcluster_loft_sh_namespace!=\"\"}, label_vcluster_loft_sh_namespace)",
+     "refId": "v"
+    },
+    "includeAll": true,
+    "multi": true,
+    "current": {
+     "text": "All",
+     "value": "$__all"
+    },
+    "refresh": 2
+   }
+  ]
+ },
+ "panels": [
+  {
+   "type": "row",
+   "title": "Quota (set by the platform; your hard limits)",
+   "id": 2,
+   "collapsed": false,
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 24,
+    "h": 1
+   }
+  },
+  {
+   "type": "bargauge",
+   "title": "Quota used",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "min": 0,
+     "max": 1,
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 0.8
+       },
+       {
+        "color": "red",
+        "value": 0.95
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "orientation": "horizontal",
+    "displayMode": "gradient",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "kube_resourcequota{type=\"used\"} / on (resource) kube_resourcequota{type=\"hard\"}",
+     "legendFormat": "{{resource}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prom"
+     }
+    }
+   ],
+   "description": "Share of each ResourceQuota line in use. GPU lines are whole devices (nvidia.com/gpu) and MiB of GPU memory (nvidia.com/gpumem).",
+   "id": 3,
+   "gridPos": {
+    "x": 0,
+    "y": 1,
+    "w": 12,
+    "h": 9
+   }
+  },
+  {
+   "type": "table",
+   "title": "Quota, raw",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max by (resource, type) (kube_resourcequota)",
+     "format": "table",
+     "instant": true,
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prom"
+     }
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true
+      },
+      "renameByName": {}
+     }
+    }
+   ],
+   "description": "type=hard is the limit, type=used the current sum.",
+   "id": 4,
+   "gridPos": {
+    "x": 12,
+    "y": 1,
+    "w": 12,
+    "h": 9
+   }
+  },
+  {
+   "type": "row",
+   "title": "Workloads (by your own pod names)",
+   "id": 5,
+   "collapsed": false,
+   "gridPos": {
+    "x": 0,
+    "y": 10,
+    "w": 24,
+    "h": 1
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "CPU",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "cores",
+     "custom": {
+      "fillOpacity": 10,
+      "stacking": {
+       "mode": "normal"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (namespace, pod) (rate(container_cpu_usage_seconds_total{container=\"\", pod!=\"\"}[5m])) * on (namespace, pod) group_left (vpod) label_replace(max by (namespace, pod, annotation_vcluster_loft_sh_object_name) (kube_pod_annotations{annotation_vcluster_loft_sh_object_name!=\"\"}), \"vpod\", \"$1\", \"annotation_vcluster_loft_sh_object_name\", \"(.+)\") * on (namespace, pod) group_left () max by (namespace, pod) (kube_pod_labels{label_vcluster_loft_sh_namespace=~\"$vnamespace\"})",
+     "legendFormat": "{{vpod}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prom"
+     }
+    }
+   ],
+   "description": "Per pod: a gVisor sandbox is one cgroup, so there is no per-container split.",
+   "id": 6,
+   "gridPos": {
+    "x": 0,
+    "y": 11,
+    "w": 12,
+    "h": 8
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Memory (working set)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "fillOpacity": 10,
+      "stacking": {
+       "mode": "normal"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (namespace, pod) (container_memory_working_set_bytes{container=\"\", pod!=\"\"}) * on (namespace, pod) group_left (vpod) label_replace(max by (namespace, pod, annotation_vcluster_loft_sh_object_name) (kube_pod_annotations{annotation_vcluster_loft_sh_object_name!=\"\"}), \"vpod\", \"$1\", \"annotation_vcluster_loft_sh_object_name\", \"(.+)\") * on (namespace, pod) group_left () max by (namespace, pod) (kube_pod_labels{label_vcluster_loft_sh_namespace=~\"$vnamespace\"})",
+     "legendFormat": "{{vpod}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prom"
+     }
+    }
+   ],
+   "id": 7,
+   "gridPos": {
+    "x": 12,
+    "y": 11,
+    "w": 12,
+    "h": 8
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Container restarts (last 1h)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "fillOpacity": 10,
+      "stacking": {
+       "mode": "none"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (namespace, pod) (increase(kube_pod_container_status_restarts_total[1h])) * on (namespace, pod) group_left (vpod) label_replace(max by (namespace, pod, annotation_vcluster_loft_sh_object_name) (kube_pod_annotations{annotation_vcluster_loft_sh_object_name!=\"\"}), \"vpod\", \"$1\", \"annotation_vcluster_loft_sh_object_name\", \"(.+)\") * on (namespace, pod) group_left () max by (namespace, pod) (kube_pod_labels{label_vcluster_loft_sh_namespace=~\"$vnamespace\"})",
+     "legendFormat": "{{vpod}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prom"
+     }
+    }
+   ],
+   "id": 8,
+   "gridPos": {
+    "x": 0,
+    "y": 19,
+    "w": 12,
+    "h": 8
+   }
+  },
+  {
+   "type": "table",
+   "title": "Pods not running",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "(sum by (namespace, pod, phase) (kube_pod_status_phase{phase!~\"Running|Succeeded\"}) > 0) * on (namespace, pod) group_left (vpod) label_replace(max by (namespace, pod, annotation_vcluster_loft_sh_object_name) (kube_pod_annotations{annotation_vcluster_loft_sh_object_name!=\"\"}), \"vpod\", \"$1\", \"annotation_vcluster_loft_sh_object_name\", \"(.+)\") * on (namespace, pod) group_left () max by (namespace, pod) (kube_pod_labels{label_vcluster_loft_sh_namespace=~\"$vnamespace\"})",
+     "format": "table",
+     "instant": true,
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prom"
+     }
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true
+      },
+      "renameByName": {
+       "vpod": "pod (yours)",
+       "pod": "pod (host)"
+      }
+     }
+    }
+   ],
+   "id": 9,
+   "gridPos": {
+    "x": 12,
+    "y": 19,
+    "w": 12,
+    "h": 8
+   }
+  },
+  {
+   "type": "row",
+   "title": "GPU (your slices; the card itself is shared and not shown)",
+   "id": 10,
+   "collapsed": false,
+   "gridPos": {
+    "x": 0,
+    "y": 27,
+    "w": 24,
+    "h": 1
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "GPU memory slice",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "decmbytes",
+     "custom": {
+      "fillOpacity": 10,
+      "stacking": {
+       "mode": "none"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "tenant:gpu_slice_mib * on (namespace, pod) group_left (vpod) label_replace(max by (namespace, pod, annotation_vcluster_loft_sh_object_name) (kube_pod_annotations{annotation_vcluster_loft_sh_object_name!=\"\"}), \"vpod\", \"$1\", \"annotation_vcluster_loft_sh_object_name\", \"(.+)\")",
+     "legendFormat": "{{vpod}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prom"
+     }
+    }
+   ],
+   "description": "nvidia.com/gpumem per pod: the sandbox sees exactly this much GPU memory, and allocations past it are refused by gVisor.",
+   "id": 11,
+   "gridPos": {
+    "x": 0,
+    "y": 28,
+    "w": 8,
+    "h": 8
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "GPU time weight",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "fillOpacity": 10,
+      "stacking": {
+       "mode": "none"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "tenant:gpu_weight * on (namespace, pod) group_left (vpod) label_replace(max by (namespace, pod, annotation_vcluster_loft_sh_object_name) (kube_pod_annotations{annotation_vcluster_loft_sh_object_name!=\"\"}), \"vpod\", \"$1\", \"annotation_vcluster_loft_sh_object_name\", \"(.+)\")",
+     "legendFormat": "{{vpod}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prom"
+     }
+    }
+   ],
+   "description": "nvidia.com/gpucores per pod: its share of GPU time against neighbours on the same card, re-divided every period; an idle neighbour costs you nothing.",
+   "id": 12,
+   "gridPos": {
+    "x": 8,
+    "y": 28,
+    "w": 8,
+    "h": 8
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Devices held",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "colorMode": "background",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "textMode": "value_and_name"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum(kube_pod_container_resource_limits{resource=\"nvidia_com_gpu\"})",
+     "legendFormat": "GPUs",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prom"
+     }
+    }
+   ],
+   "id": 13,
+   "gridPos": {
+    "x": 16,
+    "y": 28,
+    "w": 8,
+    "h": 8
+   }
+  },
+  {
+   "type": "row",
+   "title": "Network (Cilium)",
+   "id": 14,
+   "collapsed": false,
+   "gridPos": {
+    "x": 0,
+    "y": 36,
+    "w": 24,
+    "h": 1
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Dropped packets from your pods",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "pps",
+     "custom": {
+      "fillOpacity": 10,
+      "stacking": {
+       "mode": "none"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "tenant:network_drops:rate5m",
+     "legendFormat": "{{reason}} {{protocol}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prom"
+     }
+    }
+   ],
+   "description": "POLICY_DENY to the internet is expected: tenant egress outside the cluster is blocked by design.",
+   "id": 15,
+   "gridPos": {
+    "x": 0,
+    "y": 37,
+    "w": 12,
+    "h": 8
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Policy denials",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "pps",
+     "custom": {
+      "fillOpacity": 10,
+      "stacking": {
+       "mode": "none"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "tenant:policy_denied:rate5m",
+     "legendFormat": "{{direction}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prom"
+     }
+    }
+   ],
+   "description": "Ingress denials do not say who was denied.",
+   "id": 16,
+   "gridPos": {
+    "x": 12,
+    "y": 37,
+    "w": 12,
+    "h": 8
+   }
+  },
+  {
+   "type": "row",
+   "title": "Logs",
+   "id": 17,
+   "collapsed": false,
+   "gridPos": {
+    "x": 0,
+    "y": 45,
+    "w": 24,
+    "h": 1
+   }
+  },
+  {
+   "type": "logs",
+   "title": "Logs",
+   "datasource": {
+    "type": "loki",
+    "uid": "loki"
+   },
+   "options": {
+    "showTime": true,
+    "wrapLogMessage": true,
+    "sortOrder": "Descending"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "{vnamespace=~\"${vnamespace:regex}\"}",
+     "datasource": {
+      "type": "loki",
+      "uid": "loki"
+     }
+    }
+   ],
+   "id": 18,
+   "gridPos": {
+    "x": 0,
+    "y": 46,
+    "w": 24,
+    "h": 12
+   }
+  }
+ ]
+}

@@ -1,0 +1,17 @@
+# Lets the host Prometheus scrape one tenant's pods. Tenant namespaces are
+# default-deny ingress (../tenant-netpol.yaml), and the Cilium floor only
+# denies OTHER TENANTS, so this single allow is enough.
+#   sed s/TENANT/tenant-nv-a/g tenant-scrape-allow.yaml | kubectl apply -f -
+# Any port: scrape ports are the tenant's choice (prometheus.io/port), and the
+# source is one trusted pod.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata: { name: allow-prometheus-scrape, namespace: TENANT }
+spec:
+  endpointSelector:
+    matchLabels: { vcluster.loft.sh/managed-by: TENANT }
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: observability
+        app.kubernetes.io/name: prometheus

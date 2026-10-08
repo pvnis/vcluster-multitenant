@@ -1,0 +1,47 @@
+# One prom-label-proxy per tenant: the ONLY way a tenant's Grafana org reaches
+# Prometheus. It rewrites every query to carry namespace="<tenant>" (the host
+# namespace every one of the tenant's pods lands in), on selectors the user
+# wrote and on ones they did not, so no PromQL can read another tenant's
+# series or any series without that label (nodes, GPUs, the broker). The
+# tenant recording rules in rules.yaml exist to put chosen platform signals
+# onto that label.
+#
+#   sed s/TENANT/tenant-nv-a/g tenant-prom-proxy.yaml | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: prom-proxy-TENANT, namespace: observability, labels: { app: prom-label-proxy, tenant: TENANT } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: prom-label-proxy, tenant: TENANT } }
+  template:
+    metadata: { labels: { app: prom-label-proxy, tenant: TENANT } }
+    spec:
+      nodeSelector: { midori.role: observability }
+      tolerations: [{ key: midori.role, operator: Equal, value: observability, effect: NoSchedule }]
+      containers:
+      - name: proxy
+        image: quay.io/prometheuscommunity/prom-label-proxy:v0.15.1
+        args:
+          - --insecure-listen-address=0.0.0.0:8080
+          - --upstream=http://kps-kube-prometheus-stack-prometheus.observability.svc:9090
+          - --label=namespace
+          # -label-value, a FIXED value. With none of -label-value,
+          # -header-name or -query-param set, the proxy takes the tenant from
+          # a query parameter named after the label -- i.e. from the client --
+          # and any tenant could ask for any namespace. (-value, from older
+          # docs, no longer exists in v0.15 and stops the proxy at startup.)
+          - --label-value=TENANT
+          - --enable-label-apis
+        ports: [{ name: http, containerPort: 8080 }]
+        resources:
+          requests: { cpu: 10m, memory: 16Mi }
+          limits: { memory: 64Mi }
+        # The image names its user `nobody`; runAsNonRoot needs a number to verify.
+        securityContext: { runAsNonRoot: true, runAsUser: 65534, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: prom-proxy-TENANT, namespace: observability }
+spec:
+  selector: { app: prom-label-proxy, tenant: TENANT }
+  ports: [{ port: 8080, targetPort: 8080 }]

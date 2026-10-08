@@ -1,0 +1,85 @@
+# Grafana (chart grafana/grafana 10.5.15, Grafana 12.3) on midori-eye-0.
+#
+#   helm upgrade --install grafana grafana/grafana --version 10.5.15 -n observability -f grafana-values.yaml
+#
+# Org 1 ("midori admin") is the admin view: Prometheus and Loki directly, all
+# Loki tenants, every dashboard the sidecar finds. Tenants are separate orgs
+# made by grafana-tenants.py, whose datasources reach only that tenant's
+# prom-label-proxy and Loki tenant. Tenant users are Editors, never org
+# Admins: an org Admin can edit datasources, and so could point theirs at
+# Prometheus directly or change the Loki tenant header.
+#
+# Needs Secret grafana-admin (admin-user, admin-password), made out of band.
+nodeSelector: { midori.role: observability }
+tolerations: [{ key: midori.role, operator: Equal, value: observability, effect: NoSchedule }]
+admin:
+  existingSecret: grafana-admin
+  userKey: admin-user
+  passwordKey: admin-password
+service:
+  type: NodePort      # no Octavia
+  nodePort: 30300
+# The chart's init-chown-data runs as root with only CAP_CHOWN. It worked on
+# the empty volume of the first start, then failed every start after
+# ("chown: /var/lib/grafana/pdf: Permission denied"): Grafana makes 0700
+# directories that root without CAP_DAC_OVERRIDE cannot enter. local-path
+# creates its volumes world-writable, so nothing needs chowning.
+initChownData: { enabled: false }
+# One RWO volume (SQLite): a rolling update briefly runs two Grafanas on it.
+deploymentStrategy: { type: Recreate }
+persistence:
+  enabled: true
+  storageClassName: local-path
+  size: 1Gi
+resources:
+  requests: { cpu: 50m, memory: 128Mi }
+  limits: { memory: 512Mi }
+grafana.ini:
+  server:
+    root_url: http://10.30.30.204:30300/
+  users:
+    allow_sign_up: false
+    allow_org_create: false
+    # Not into the admin org. grafana-tenants.py puts each tenant user in its
+    # own org and checks it is a member of nothing else.
+    auto_assign_org: false
+    viewers_can_edit: false
+    editors_can_admin: false
+  auth.anonymous: { enabled: false }
+  analytics: { reporting_enabled: false, check_for_updates: false, check_for_plugin_updates: false }
+  # Tenants have no egress, and neither should their dashboards fetch images.
+  snapshots: { external_enabled: false }
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        uid: prom
+        type: prometheus
+        url: http://kps-kube-prometheus-stack-prometheus.observability.svc:9090
+        isDefault: true
+        orgId: 1
+      - name: Loki (all tenants)
+        uid: loki
+        type: loki
+        url: http://loki.observability.svc:3100
+        orgId: 1
+        jsonData:
+          httpHeaderName1: X-Scope-OrgID
+        secureJsonData:
+          # Multi-tenant query (loki querier.multi_tenant_queries_enabled).
+          # Add each new tenant here.
+          httpHeaderValue1: platform|tenant-nv-a|tenant-nv-b|tenant-phoenix
+      - name: Alertmanager
+        uid: alertmanager
+        type: alertmanager
+        url: http://kps-kube-prometheus-stack-alertmanager.observability.svc:9093
+        orgId: 1
+        jsonData: { implementation: prometheus }
+sidecar:
+  dashboards:
+    enabled: true
+    label: grafana_dashboard
+    searchNamespace: [observability, kube-system]
+    folderAnnotation: grafana_folder
+    provider: { foldersFromFilesStructure: true }

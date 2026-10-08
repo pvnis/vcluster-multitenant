@@ -1,0 +1,49 @@
+# Loki 3.6 (chart grafana/loki 7.3.0), single binary on midori-eye-0, in
+# MULTI-TENANT mode: every stream belongs to a Loki tenant (X-Scope-OrgID).
+# Alloy (alloy-values.yaml) assigns the tenant: a tenant namespace's logs go
+# to the Loki tenant of the same name, everything else to `platform`. A
+# tenant's Grafana datasource sends only its own ID, so it cannot read another
+# tenant's logs whatever LogQL it writes; the admin datasource sends
+# `platform|tenant-nv-a|...` (multi-tenant queries).
+#
+#   helm upgrade --install loki grafana/loki --version 7.3.0 -n observability -f loki-values.yaml
+deploymentMode: SingleBinary
+loki:
+  auth_enabled: true
+  commonConfig: { replication_factor: 1 }
+  storage: { type: filesystem }
+  schemaConfig:
+    configs:
+      - { from: "2026-10-01", store: tsdb, object_store: filesystem, schema: v13, index: { prefix: index_, period: 24h } }
+  limits_config:
+    retention_period: 168h        # 7 days; the disk is 60 GB and shared with Prometheus
+    ingestion_rate_mb: 8
+    ingestion_burst_size_mb: 16
+    max_query_lookback: 168h
+  compactor:
+    retention_enabled: true
+    delete_request_store: filesystem
+  querier: { multi_tenant_queries_enabled: true }
+  pattern_ingester: { enabled: false }
+  ruler: { enable_api: false }
+singleBinary:
+  replicas: 1
+  nodeSelector: { midori.role: observability }
+  tolerations: [{ key: midori.role, operator: Equal, value: observability, effect: NoSchedule }]
+  persistence: { enabled: true, storageClass: local-path, size: 15Gi }
+  resources:
+    requests: { cpu: 100m, memory: 512Mi }
+    limits: { memory: 1536Mi }
+# Single binary only.
+backend: { replicas: 0 }
+read: { replicas: 0 }
+write: { replicas: 0 }
+# memcached caches would cost more memory than the VM has to spare.
+chunksCache: { enabled: false }
+resultsCache: { enabled: false }
+# Clients talk to loki:3100 directly; the nginx gateway adds nothing here.
+gateway: { enabled: false }
+lokiCanary: { enabled: false }
+test: { enabled: false }
+monitoring:
+  serviceMonitor: { enabled: true }

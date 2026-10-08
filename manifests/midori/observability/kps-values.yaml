@@ -1,0 +1,143 @@
+# kube-prometheus-stack 92.1.0 for midori, in namespace `observability`.
+#
+#   helm upgrade --install kps prometheus-community/kube-prometheus-stack \
+#     --version 92.1.0 -n observability -f kps-values.yaml
+#
+# Everything stateful runs on midori-eye-0 (4 vCPU / 7 GiB / 60 GB; label and
+# taint midori.role=observability), so monitoring neither competes with
+# tenants on the GPU nodes nor dies with one of them. Budgets below are sized
+# to that VM: Prometheus <= 3Gi and 18 GB of TSDB.
+#
+# Grafana is NOT installed by this chart: grafana-values.yaml installs it on
+# its own, because tenant orgs, users and datasources are made through its API
+# (grafana-tenants.py) and the chart's provisioning is single-org.
+
+x-eye: &eye
+  nodeSelector: { midori.role: observability }
+  tolerations: [{ key: midori.role, operator: Equal, value: observability, effect: NoSchedule }]
+
+grafana:
+  enabled: false
+  # Still ship the stack's dashboards as ConfigMaps; grafana-values.yaml's
+  # sidecar loads them into the admin org.
+  forceDeployDashboards: true
+
+# k3s runs the controller-manager, scheduler and (no) kube-proxy inside its own
+# process, bound to localhost; there is nothing to scrape and their default
+# alerts would fire forever.
+kubeControllerManager: { enabled: false }
+kubeScheduler: { enabled: false }
+kubeProxy: { enabled: false }
+# etcd: k3s servers run with `etcd-expose-metrics: true`, so 2381 is reachable.
+kubeEtcd:
+  enabled: true
+  endpoints: [10.30.30.31, 10.30.30.48, 10.30.30.142]
+  service: { enabled: true, port: 2381, targetPort: 2381 }
+  serviceMonitor: { scheme: http }
+defaultRules:
+  rules:
+    kubeControllerManager: false
+    kubeSchedulerAlerting: false
+    kubeSchedulerRecording: false
+    kubeProxy: false
+
+prometheusOperator:
+  <<: *eye
+  admissionWebhooks:
+    patch: *eye
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 256Mi }
+
+kube-state-metrics:
+  <<: *eye
+  # vCluster's labels on every synced pod: which tenant, and its namespace
+  # inside the tenant. Dashboards join on these to show a tenant its own
+  # names instead of the host's `<pod>-x-<ns>-x-<tenant>`.
+  metricLabelsAllowlist:
+    - pods=[vcluster.loft.sh/managed-by,vcluster.loft.sh/namespace]
+  # EXACTLY these annotations, never `*`: vCluster also writes a ServiceAccount
+  # TOKEN into a pod annotation (vcluster.loft.sh/token-<id>), and an
+  # annotations wildcard would copy every tenant's token into Prometheus.
+  metricAnnotationsAllowList:
+    - pods=[vcluster.loft.sh/object-name]
+
+prometheus-node-exporter:
+  # Every node, the tainted control planes and eye included.
+  tolerations: [{ operator: Exists }]
+  extraArgs:
+    # GPU nodes: gpusched-textfile.sh writes the driver broker's counters and
+    # unit states here.
+    - --collector.textfile.directory=/host/textfile
+  extraHostVolumeMounts:
+    - { name: textfile, hostPath: /var/lib/node_exporter/textfile, mountPath: /host/textfile, readOnly: true, mountPropagation: HostToContainer }
+
+alertmanager:
+  alertmanagerSpec:
+    <<: *eye
+    resources:
+      requests: { cpu: 10m, memory: 32Mi }
+      limits: { memory: 128Mi }
+    # No receivers yet: alerts are visible in Grafana/Alertmanager only.
+
+prometheus:
+  prometheusSpec:
+    <<: *eye
+    retention: 7d
+    retentionSize: 18GB
+    resources:
+      requests: { cpu: 200m, memory: 1Gi }
+      limits: { memory: 3Gi }
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes: [ReadWriteOnce]
+          resources: { requests: { storage: 25Gi } }
+    # Pick up every ServiceMonitor/PodMonitor/rule in the cluster, not only
+    # this release's.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    # Tenant workloads. A tenant's own ServiceMonitors live inside its vCluster,
+    # where no Prometheus Operator runs, so the host discovers tenant pods
+    # itself. Both jobs keep ONLY pods the syncer stamped with
+    # vcluster.loft.sh/managed-by (which a tenant cannot forge), and label each
+    # series with:
+    #   namespace  the HOST namespace = the tenant. prom-label-proxy pins
+    #              tenant queries on this label.
+    #   tenant     the same, by name
+    #   vnamespace / vpod  the namespace and pod name the tenant itself sees
+    # Reaching the pods needs tenant-scrape-allow.yaml in each tenant namespace.
+    additionalScrapeConfigs:
+      # Opt-in by the usual annotations (prometheus.io/scrape, /port, /path).
+      # cert-manager and AgentGateway already carry them.
+      - job_name: tenant-pods-annotated
+        kubernetes_sd_configs: [{ role: pod }]
+        relabel_configs:
+          - { source_labels: [__meta_kubernetes_pod_label_vcluster_loft_sh_managed_by], regex: .+, action: keep }
+          - { source_labels: [__meta_kubernetes_pod_phase], regex: Running, action: keep }
+          - { source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape], regex: "true", action: keep }
+          - { source_labels: [__meta_kubernetes_pod_ip, __meta_kubernetes_pod_annotation_prometheus_io_port], regex: "(.+);(\\d+)", replacement: "$1:$2", target_label: __address__ }
+          - { source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path], regex: (.+), target_label: __metrics_path__ }
+          - { source_labels: [__meta_kubernetes_namespace], target_label: namespace }
+          - { source_labels: [__meta_kubernetes_pod_name], target_label: pod }
+          - { source_labels: [__meta_kubernetes_pod_label_vcluster_loft_sh_managed_by], target_label: tenant }
+          - { source_labels: [__meta_kubernetes_pod_label_vcluster_loft_sh_namespace], target_label: vnamespace }
+          - { source_labels: [__meta_kubernetes_pod_annotation_vcluster_loft_sh_object_name], target_label: vpod }
+      # Known serving ports that carry no annotations: vLLM's API port (its
+      # /metrics is on it) and the GAIE endpoint picker's metrics port.
+      - job_name: tenant-pods-serving
+        kubernetes_sd_configs: [{ role: pod }]
+        relabel_configs:
+          - { source_labels: [__meta_kubernetes_pod_label_vcluster_loft_sh_managed_by], regex: .+, action: keep }
+          - { source_labels: [__meta_kubernetes_pod_phase], regex: Running, action: keep }
+          - { source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape], regex: "true", action: drop }
+          - { source_labels: [__meta_kubernetes_pod_container_port_name, __meta_kubernetes_pod_container_port_number], regex: "vllm;8000|metrics;9090", action: keep }
+          - { source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component], target_label: component }
+          - { source_labels: [__meta_kubernetes_namespace], target_label: namespace }
+          - { source_labels: [__meta_kubernetes_pod_name], target_label: pod }
+          - { source_labels: [__meta_kubernetes_pod_label_vcluster_loft_sh_managed_by], target_label: tenant }
+          - { source_labels: [__meta_kubernetes_pod_label_vcluster_loft_sh_namespace], target_label: vnamespace }
+          - { source_labels: [__meta_kubernetes_pod_annotation_vcluster_loft_sh_object_name], target_label: vpod }

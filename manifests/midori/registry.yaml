@@ -33,7 +33,7 @@ spec:
       containers:
       - name: registry
         image: registry:2.8.3
-        ports: [{ containerPort: 5000 }]
+        ports: [{ containerPort: 5000 }, { name: debug, containerPort: 5001 }]
         envFrom: [{ secretRef: { name: registry-s3 } }]
         env:
         - { name: REGISTRY_STORAGE, value: s3 }
@@ -45,6 +45,9 @@ spec:
         - { name: REGISTRY_STORAGE_S3_SKIPVERIFY, value: "true" }
         - { name: REGISTRY_STORAGE_REDIRECT_DISABLE, value: "true" }
         - { name: REGISTRY_STORAGE_DELETE_ENABLED, value: "true" }
+        # Prometheus metrics on the debug server (observability/scrape.yaml).
+        - { name: REGISTRY_HTTP_DEBUG_ADDR, value: ":5001" }
+        - { name: REGISTRY_HTTP_DEBUG_PROMETHEUS_ENABLED, value: "true" }
         readinessProbe: { httpGet: { path: /v2/, port: 5000 } }
         resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { memory: 512Mi } }
 ---

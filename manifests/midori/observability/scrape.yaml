@@ -1,0 +1,30 @@
+# Platform scrape targets beyond what the charts bring.
+#   kubectl apply -f scrape.yaml
+# HAMi: device-plugin monitor (per-node vGPU allocation) and the scheduler.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata: { name: hami, namespace: observability }
+spec:
+  namespaceSelector: { matchNames: [kube-system] }
+  selector: { matchLabels: { app.kubernetes.io/instance: hami } }
+  endpoints:
+    - { port: monitorport, interval: 30s }
+    - { port: monitor, interval: 30s }
+---
+# The S3 gateway (rclone --metrics-addr=:9250).
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata: { name: s3-gateway, namespace: observability }
+spec:
+  namespaceSelector: { matchNames: [s3-gateway] }
+  selector: { matchLabels: { app: s3-gateway } }
+  podMetricsEndpoints: [{ port: metrics, interval: 30s }]
+---
+# The in-cluster registry's debug server (REGISTRY_HTTP_DEBUG_ADDR, :5001).
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata: { name: registry, namespace: observability }
+spec:
+  namespaceSelector: { matchNames: [registry] }
+  selector: { matchLabels: { app: registry } }
+  podMetricsEndpoints: [{ port: debug, interval: 30s }]

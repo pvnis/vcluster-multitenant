@@ -1,0 +1,27 @@
+# dcgm-exporter 4.8.4: per-physical-GPU metrics (utilisation, memory, power,
+# temperature, NVLink) on the two GPU nodes. ADMIN VIEW ONLY: a physical
+# card's utilisation includes every tenant sharing it, which would tell one
+# tenant how busy its neighbours are. rules.yaml gives tenants nothing from
+# here.
+#
+#   helm upgrade --install dcgm gpu-helm-charts/dcgm-exporter --version 4.8.4 \
+#     -n observability -f dcgm-values.yaml
+#
+# runc with the nvidia runtime, not gVisor: it talks to the host driver
+# directly. It requests no nvidia.com/gpu, so HAMi leaves it alone and it
+# takes no slice; NVIDIA_VISIBLE_DEVICES=all makes the runtime mount every
+# card read-only for monitoring.
+runtimeClassName: nvidia
+nodeSelector: { gpu.vendor: nvidia }
+extraEnv:
+  - { name: NVIDIA_VISIBLE_DEVICES, value: all }
+  - { name: NVIDIA_DRIVER_CAPABILITIES, value: utility }
+resources:
+  requests: { cpu: 50m, memory: 128Mi }
+  limits: { memory: 1Gi }   # measured ~410Mi idle
+serviceMonitor:
+  enabled: true
+  # The chart pins scrapeTimeout at 25s, and Prometheus rejects a timeout
+  # longer than the interval: at 15s the operator dropped the ServiceMonitor
+  # without a word in `kubectl get`. Its log says why.
+  interval: 30s
