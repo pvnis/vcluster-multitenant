@@ -150,8 +150,7 @@ const RESOURCES = [
   { key: 'requests.nvidia.com/gpu', cap: 'gpus', label: 'GPU attachments', kind: 'count', unit: 'cards',
     capacityOf: (c) => c.cards,
     note: (c) => `Against the ${c.cards} cards: the worst case, every attachment a whole card. Sharing fits up to ${c.cards ? Math.round(c.gpus.capacity / c.cards) : 10} pods on a card.` },
-  { key: 'requests.nvidia.com/gpumem', cap: 'gpuMemoryMiB', label: 'GPU memory', kind: 'mib', unit: '',
-    note: () => 'Pods that take whole cards request no GPU memory, so "requested" can read low on a full cluster.' },
+  { key: 'requests.nvidia.com/gpumem', cap: 'gpuMemoryMiB', label: 'GPU memory', kind: 'mib', unit: '', held: true },
   { key: 'requests.nvidia.com/gpucores', cap: 'gpuCores', label: 'GPU time', kind: 'count', unit: '(100 = one card)', optional: true,
     note: () => 'A weight, not a cap: idle time goes to whoever is busy.' },
   { key: 'requests.cpu', cap: 'cpu', label: 'CPU', kind: 'cpu', unit: 'cores' },
@@ -160,8 +159,11 @@ const RESOURCES = [
 
 const amount = (_kind, raw) => qty(raw);
 
+const pctOf = (v, cap) => `${cap > 0 ? Math.round((v / cap) * 100) : 0}% of capacity`;
+
 function renderCapacity() {
   const c = data.capacity;
+  const gm = data.gpuMemory ?? { available: false, heldByTenant: {}, heldMiB: 0, usedMiB: null };
   const rows = RESOURCES.map((r) => {
     const capacity = r.capacityOf ? r.capacityOf(c) : c[r.cap]?.capacity ?? 0;
     const shares = data.tenants.map((t) => ({ t, line: t.quota[r.key] })).filter((x) => x.line);
@@ -177,7 +179,8 @@ function renderCapacity() {
       shares.filter((x) => amount(r.kind, x.line.hard) > 0).map((x) => {
         const v = amount(r.kind, x.line.hard), used = amount(r.kind, x.line.used);
         const seg = h('span', { class: 'seg', tabindex: 0, style: `width:${(v / scale) * 100}%;background:${tenantColour(x.t.name)}` });
-        const tip = [`${x.t.name}`, `quota ${fmt(r.kind, v)}${unitText}`, `requested now ${fmt(r.kind, used)}`, capacity ? `${Math.round((v / capacity) * 100)}% of capacity` : ''];
+        const now = r.held && gm.available ? `holds now ${fmt('mib', gm.heldByTenant[x.t.name] ?? 0)}` : `requested now ${fmt(r.kind, used)}`;
+        const tip = [`${x.t.name}`, `quota ${fmt(r.kind, v)}${unitText}`, now, capacity ? `${Math.round((v / capacity) * 100)}% of capacity` : ''];
         seg.addEventListener('mouseenter', (e) => showTip(e, tip));
         seg.addEventListener('mousemove', moveTip);
         seg.addEventListener('mouseleave', hideTip);
@@ -208,12 +211,19 @@ function renderCapacity() {
       stack,
       h('div', { class: 'stack-scale muted' }, capPos > 10 ? h('span', { text: '0' }) : null, capacity > 0 ? h('span', { class: 'cap-label', style: capLabelStyle, text: 'capacity' }) : null),
       h('div', { class: 'breakdown' },
-        shares.map((x) => h('span', { class: 'who' }, swatch(x.t.name), `${x.t.name} `, h('strong', { text: fmt(r.kind, amount(r.kind, x.line.hard)) }))),
+        shares.map((x) => h('span', { class: 'who' }, swatch(x.t.name), `${x.t.name} `, h('strong', { text: fmt(r.kind, amount(r.kind, x.line.hard)) }),
+          r.held && gm.available ? h('span', { class: 'muted', text: ` · holds ${fmt('mib', gm.heldByTenant[x.t.name] ?? 0)}` }) : null)),
         unlimited.length ? h('span', { class: 'who muted', text: `no limit: ${unlimited.join(', ')}` }) : null),
-      h('div', { class: 'requested muted' },
-        `Requested now: ${fmt(r.kind, requested)}${unitText}`,
-        capacity > 0 ? ` (${Math.round((requested / capacity) * 100)}% of capacity)` : '',
-        r.note ? h('span', { text: ` — ${r.note(c)}` }) : null));
+      r.held && gm.available
+        ? h('div', { class: 'requested muted' },
+            'Held now: ', h('strong', { text: fmt('mib', gm.heldMiB) }), ` (${pctOf(gm.heldMiB, capacity)})`,
+            ' — slices at their request, whole-GPU pods at a full card each',
+            gm.usedMiB !== null ? [' · in use on the cards: ', h('strong', { text: fmt('mib', gm.usedMiB) }), ` (${pctOf(gm.usedMiB, capacity)}, measured)`] : null)
+        : h('div', { class: 'requested muted' },
+            `Requested now: ${fmt(r.kind, requested)}${unitText}`,
+            capacity > 0 ? ` (${pctOf(requested, capacity)})` : '',
+            r.held ? ' — whole-GPU pods declare no GPU memory and are not counted here (held/used figures unavailable: Prometheus unreachable)' : '',
+            r.note ? h('span', { text: ` — ${r.note(c)}` }) : null));
   });
   $('#capacity').replaceChildren(
     h('div', { class: 'card commit' },
@@ -239,13 +249,16 @@ function moveTip(e) {
 }
 function hideTip() { tipEl.hidden = true; }
 
-function miniQuota(line, kind, unit = '') {
+function miniQuota(line, kind, unit = '', held) {
   if (!line) return h('span', { class: 'muted', text: '—' });
-  const used = qty(line.used), hard = qty(line.hard);
+  // GPU memory: what the tenant HOLDS (whole cards included), not what its
+  // pods declare -- whole-GPU pods declare none.
+  const used = held !== undefined ? held : qty(line.used), hard = qty(line.hard);
+  const verb = held !== undefined ? 'holds' : 'requested';
   const u = hard === 1 ? unit.replace(/s$/, '') : unit;  // "1 GPU", "2 GPUs"
   return h('div', { class: 'mini' },
     h('div', { class: 'nums' }, h('strong', { text: `${fmt(kind, hard)}${u}` })),
-    h('div', { class: 'muted used', text: `requested ${fmt(kind, used)}${hard > 0 ? ` · ${Math.round((used / hard) * 100)}%` : ''}` }),
+    h('div', { class: 'muted used', text: `${verb} ${fmt(kind, used)}${hard > 0 ? ` · ${Math.round((used / hard) * 100)}%` : ''}` }),
     bar(used, undefined, hard));
 }
 
@@ -254,7 +267,7 @@ function renderTenants() {
     h('td', {}, h('div', { class: 'name' }, swatch(t.name), t.name), h('small', { class: 'muted', text: t.spec.controlPlane.size === 'large' ? 'large control plane' : '' })),
     h('td', {}, h('div', { class: 'chips' }, statusChips(t))),
     h('td', {}, miniQuota(t.quota['requests.nvidia.com/gpu'], 'count', ' GPUs')),
-    h('td', {}, miniQuota(t.quota['requests.nvidia.com/gpumem'], 'mib')),
+    h('td', {}, miniQuota(t.quota['requests.nvidia.com/gpumem'], 'mib', '', data.gpuMemory?.available ? (data.gpuMemory.heldByTenant[t.name] ?? 0) : undefined)),
     h('td', {}, miniQuota(t.quota['requests.cpu'], 'cpu', ' cores')),
     h('td', {}, miniQuota(t.quota['requests.memory'], 'memory')),
     h('td', {}, h('span', { class: `chip ${t.spec.network.internet ? 'info' : ''}`, text: t.spec.network.internet ? 'internet' : 'isolated' })),

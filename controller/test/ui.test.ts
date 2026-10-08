@@ -84,3 +84,11 @@ test('carryOver: an edit keeps the pinned API NodePort the form does not show', 
   assert.equal(carryOver(undefined, parseSpec({ quota: { gpus: 1, gpuMemoryMiB: 1 } })).controlPlane.apiNodePort, undefined);
 });
 
+
+test('GPU memory held: the UI and the admin Grafana panel use the same query', async () => {
+  const { HELD_BY_TENANT } = await import('../src/ui/promql.ts');
+  const { readFileSync } = await import('node:fs');
+  const dash = JSON.parse(readFileSync('../manifests/midori/observability/dashboards/admin-midori.json', 'utf8'));
+  const panel = dash.panels.find((p: any) => p.title === 'GPU memory held, by tenant');
+  assert.equal(panel.targets[0].expr, HELD_BY_TENANT);
+});

@@ -24,6 +24,7 @@ import { Kube, isNotFound } from '../kube.ts';
 import { ALLOW_DELETE, GROUP, VERSION, type Tenant } from '../types.ts';
 import { Auth } from './auth.ts';
 import { Invalid, NAME_RE, capacity, carryOver, newTenant, parseSpec, specPatch, tenantView } from './model.ts';
+import { gpuMemory } from './promql.ts';
 
 const PORT = Number(process.env.UI_PORT ?? 8080);
 const STATIC = process.env.UI_DIR ?? join(import.meta.dirname, '../../ui');
@@ -98,15 +99,17 @@ async function secretData(name: string): Promise<Record<string, string>> {
 }
 
 async function overview() {
-  const [tenants, quotas, nodes] = await Promise.all([
+  const [tenants, quotas, nodes, gpuMem] = await Promise.all([
     kube.listTenants() as Promise<Tenant[]>,
     kube.getPath<{ items: any[] }>('/api/v1/resourcequotas').then((r) => r.items),
     kube.getPath<{ items: any[] }>('/api/v1/nodes').then((r) => r.items),
+    gpuMemory(),
   ]);
   const rq = (ns: string) => quotas.find((q) => q.metadata?.namespace === ns && q.metadata?.name === 'tenant-quota');
   return {
     tenants: tenants.map((t) => tenantView(t, rq(t.metadata!.name!))).sort((a, b) => a.name.localeCompare(b.name)),
     capacity: capacity(nodes, quotas, tenants),
+    gpuMemory: gpuMem,
   };
 }
 

@@ -60,7 +60,12 @@ keep it in step (`kubectl diff -f deploy/tenants/<tenant>.yaml` shows any gap).
   tenants -- their quotas, as one bar stacked by tenant, each in its own
   colour -- against what the GPU nodes have, with a capacity marker and the
   percentage, flagged *overcommitted* past 100%. Below each bar: the
-  per-tenant amounts, and what running pods request now. GPU attachments are
+  per-tenant amounts, and what running pods request now -- except GPU
+  memory, which shows what tenants **hold** (each slice at its request, each
+  whole-GPU pod at a full card, which declares none) and what is **in use**
+  on the cards (DCGM), both from Prometheus, the same query as Grafana's
+  "GPU memory held" panel. If Prometheus is unreachable it falls back to
+  requests and says why. GPU attachments are
   measured against the cards (the worst case: every attachment a whole card);
   a resource no tenant limits says so instead of showing 0. Quotas reserve
   nothing, so overcommitment is a decision, not an error -- this is where it
