@@ -1,0 +1,49 @@
+# Tenants may not open connections into the platform.
+#
+#   kubectl apply -f platform-guard.yaml
+#
+# ../cilium/tenant-floor.yaml denies tenant -> other tenant and tenant -> the
+# outside world, and tenant.yaml lets tenants sync their own NetworkPolicies
+# because the floor's denies beat any allow they write. But the floor says
+# nothing about NON-tenant namespaces, so a tenant that allows itself egress
+# (one NetworkPolicy with `egress: [{}]`, inside its own vCluster) reached,
+# measured from tenant-nv-a on 2026-10-08:
+#   - the registry: listed it and STARTED A PUSH (202) -- it could have
+#     overwritten registry.midori/gvisor-webhook, the image of the quota webhook
+#     that decides every tenant pod's runtime class and GPU limits;
+#   - Loki with any X-Scope-OrgID: read tenant-phoenix's logs and INJECTED a
+#     line into them (204);
+#   - Prometheus directly, past prom-label-proxy: every namespace's series;
+#   - the HAMi scheduler extender and the quota webhook.
+#
+# This is the missing half of the floor: ingress to every endpoint in a
+# namespace WITHOUT a `tenant` label is denied from every endpoint in a
+# namespace WITH one. Deny beats allow, so nothing a tenant writes reopens it.
+# Two services tenants do need are carved out by leaving them out of the
+# selector:
+#   - cluster DNS (kube-system, k8s-app=kube-dns), which each tenant's own
+#     CoreDNS forwards to;
+#   - the S3 gateway, which authenticates per tenant and serves read-only.
+# Not affected: the host API server (an entity, not an endpoint; the floor
+# already handles it), replies to connections the platform opens (Prometheus
+# scraping tenant pods), and the vCluster control planes' own traffic to
+# the host API.
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata: { name: platform-guard }
+spec:
+  # ESSENTIAL. Without it, selecting an endpoint puts it into default-deny even
+  # though this policy only denies -- and the first version did exactly that to
+  # every platform pod: the API server could no longer reach the quota webhook
+  # (failurePolicy Fail, so no tenant pod could be created anywhere), and
+  # Grafana's NodePort went dark. This keeps the policy purely subtractive.
+  enableDefaultDeny: { ingress: false, egress: false }
+  endpointSelector:
+    matchExpressions:
+      - { key: io.cilium.k8s.namespace.labels.tenant, operator: DoesNotExist }
+      - { key: k8s-app, operator: NotIn, values: [kube-dns] }
+      - { key: app, operator: NotIn, values: [s3-gateway] }
+  ingressDeny:
+    - fromEndpoints:
+        - matchExpressions:
+            - { key: io.cilium.k8s.namespace.labels.tenant, operator: Exists }
