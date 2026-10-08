@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>midori tenants</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo" aria-hidden="true"></span>midori <span class="muted">· tenants</span></div>
+    <div class="who" id="who" hidden>
+      <span id="who-name"></span>
+      <button class="ghost" id="logout" type="button">Log out</button>
+    </div>
+  </header>
+
+  <main id="login-view" class="center" hidden>
+    <form id="login-form" class="card login" autocomplete="on">
+      <h1>Sign in</h1>
+      <p class="muted">Tenant management for the midori cluster.</p>
+      <label>User <input name="user" autocomplete="username" required></label>
+      <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+      <p class="error" id="login-error" role="alert"></p>
+      <button class="primary" type="submit">Sign in</button>
+    </form>
+  </main>
+
+  <main id="app-view" hidden>
+    <section class="capacity" id="capacity" aria-label="Cluster capacity"></section>
+
+    <section class="card">
+      <div class="section-head">
+        <div>
+          <h2>Tenants</h2>
+          <p class="muted" id="updated"></p>
+        </div>
+        <button class="primary" id="new-tenant" type="button">New tenant</button>
+      </div>
+      <div class="table-wrap">
+        <table class="tenants">
+          <thead>
+            <tr>
+              <th>Tenant</th><th>Status</th><th>GPUs</th><th>CPU (requests)</th><th>Memory (requests)</th><th>Network</th><th>API</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="tenant-rows"></tbody>
+        </table>
+      </div>
+      <p class="empty muted" id="no-tenants" hidden>No tenants yet.</p>
+    </section>
+  </main>
+
+  <!-- tenant detail -->
+  <dialog id="detail" class="drawer" aria-labelledby="detail-title">
+    <div class="drawer-head">
+      <div>
+        <h2 id="detail-title"></h2>
+        <div id="detail-chips" class="chips"></div>
+      </div>
+      <button class="ghost close" type="button" data-close aria-label="Close">✕</button>
+    </div>
+    <div id="detail-body" class="drawer-body"></div>
+  </dialog>
+
+  <!-- create / edit -->
+  <dialog id="editor" class="modal" aria-labelledby="editor-title">
+    <form id="editor-form" method="dialog" novalidate>
+      <div class="drawer-head">
+        <h2 id="editor-title">New tenant</h2>
+        <button class="ghost close" type="button" data-close aria-label="Close">✕</button>
+      </div>
+      <div class="form-grid">
+        <label class="span2" id="name-field">Name
+          <input name="name" placeholder="tenant-example" pattern="tenant-[a-z0-9](?:[a-z0-9\-]{0,23}[a-z0-9])?" required>
+          <small class="muted">“tenant-” then lowercase letters, digits or “-”; at most 32 characters.</small>
+        </label>
+
+        <fieldset class="span2">
+          <legend>GPU</legend>
+          <div class="row">
+            <label>GPUs <input name="gpus" type="number" min="0" max="4" step="1" value="1" required></label>
+            <label>GPU memory (MiB) <input name="gpuMemoryMiB" type="number" min="0" max="184272" step="1" value="46068" required></label>
+          </div>
+          <small class="muted" id="gpumem-hint"></small>
+        </fieldset>
+
+        <fieldset class="span2">
+          <legend>CPU and system memory <span class="muted">(DRAM, not GPU memory; empty = default)</span></legend>
+          <div class="row">
+            <label>CPU requests <input name="cpuRequests" placeholder="12"></label>
+            <label>CPU limits <input name="cpuLimits" placeholder="24"></label>
+          </div>
+          <div class="row">
+            <label>Memory requests <input name="memRequests" placeholder="48Gi"></label>
+            <label>Memory limits <input name="memLimits" placeholder="80Gi"></label>
+          </div>
+          <div class="row">
+            <label>Pods <input name="pods" type="number" min="1" placeholder="30"></label>
+            <label>PVCs <input name="pvcs" type="number" min="0" placeholder="10"></label>
+          </div>
+        </fieldset>
+
+        <fieldset class="span2">
+          <legend>Options</legend>
+          <label class="check"><input type="checkbox" name="internet"> Public internet <small class="muted">— private ranges, nodes and the OpenStack VIP stay blocked</small></label>
+          <label class="check"><input type="checkbox" name="large"> Large control plane <small class="muted">— 4 CPU / 4 GiB; needed for Phoenix Serving</small></label>
+          <label class="check"><input type="checkbox" name="gateway"> Expose a Phoenix Serving Gateway outside the cluster</label>
+          <label class="check"><input type="checkbox" name="serving"> vLLM dashboard in its Grafana</label>
+          <label class="check"><input type="checkbox" name="s3" checked> Key on the S3 model gateway</label>
+        </fieldset>
+
+        <label>Mode
+          <select name="management">
+            <option value="Manage">Manage — apply</option>
+            <option value="Observe">Observe — report drift only</option>
+          </select>
+        </label>
+      </div>
+      <p class="error" id="editor-error" role="alert"></p>
+      <div class="actions">
+        <button class="ghost" type="button" data-close>Cancel</button>
+        <button class="primary" type="submit" id="editor-submit">Create tenant</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- delete -->
+  <dialog id="deleter" class="modal narrow" aria-labelledby="deleter-title">
+    <form id="deleter-form" method="dialog">
+      <h2 id="deleter-title">Delete tenant</h2>
+      <p id="deleter-text"></p>
+      <label><span>Type <strong id="deleter-name"></strong> to confirm</span> <input name="confirm" autocomplete="off" spellcheck="false" required></label>
+      <p class="error" id="deleter-error" role="alert"></p>
+      <div class="actions">
+        <button class="ghost" type="button" data-close>Cancel</button>
+        <button class="danger" type="submit" id="deleter-submit" disabled>Delete</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>

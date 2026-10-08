@@ -80,3 +80,38 @@ Qwen3.8 replicas in tenant-phoenix-serving kept running.
 unset lines keep tenant-quota.yaml's values (unit-tested both ways).
 tenant-phoenix-serving was raised to CPU 20/36 and memory 96/160Gi
 (requests/limits) through its Tenant; the controller now owns those lines.
+
+## The UI (2026-10-08)
+
+A second Deployment from the same image (`src/ui/`, `ui/`), with its own
+ServiceAccount: write Tenants, read tenant-system Secrets, quotas and nodes
+-- `kubectl auth can-i` confirmed it cannot read other namespaces' Secrets,
+create pods, delete namespaces, touch Cilium policies, create Deployments or
+bind roles.
+
+Tested: `test/ui-api.sh` (401s, login, HttpOnly cookie, CSRF header and
+Origin checks, validation, typed-name delete, path traversal, security
+headers, logout), a full lifecycle through the API only (create -> Ready in
+52 s, credentials, kubeconfig download used to list nodes, edit clearing a
+CPU override, Observe and back, delete -> namespace, policies, S3 key and
+Grafana org gone; each step in the audit log), and reach: a tenant pod that
+widened its own egress could not open the UI's Service, pod or NodePort, nor
+could a platform pod; the NodePort answers from the nodes.
+
+Headless Chromium screenshots of every screen caught what the API tests
+could not:
+- the page's CSP (`style-src 'self'`) blocks style ATTRIBUTES, so bar widths
+  set with setAttribute would have rendered every usage bar empty; they are
+  set through the CSSOM;
+- the name field's `pattern` is compiled with the regex `v` flag, under which
+  a bare `-` in a character class is invalid -- client-side name checks were
+  silently off (the server's still applied);
+- the capacity cards said "in use" for quota requests, so a cluster with all
+  four GPUs busy read "GPU memory 0.0 GiB in use" (the pods take whole cards
+  and request no GPU memory): now "requested", with a note;
+- copy buttons and the delete prompt wrapped; a plain chip vanished on a
+  hovered row.
+
+And scrypt at N = 2^15 needs exactly Node's default 32 MiB limit, which it
+refuses; the unit test had used a small N for speed and missed it. It now
+tests the real cost.

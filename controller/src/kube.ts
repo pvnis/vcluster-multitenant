@@ -99,12 +99,21 @@ export class Kube {
     }
   }
 
+  // GET an API path as raw JSON (lists across namespaces, nodes, ...).
+  async getPath<T>(path: string): Promise<T> {
+    return (await this.request('GET', path)) as T;
+  }
+
   private async raw(method: string, spec: KubernetesObject, action: Action, query?: URLSearchParams,
     body?: string, contentType = 'application/json'): Promise<unknown> {
+    const path = await (this.objects as unknown as WithPaths).specUriPath(spec, action);
+    return this.request(method, path.replace(/^https?:\/\/[^/]+/, '') + (query && [...query].length ? `?${query}` : ''), body, contentType);
+  }
+
+  private async request(method: string, pathAndQuery: string, body?: string, contentType = 'application/json'): Promise<unknown> {
     const server = this.kc.getCurrentCluster()?.server;
     if (!server) throw new Error('no current cluster in kubeconfig');
-    const path = await (this.objects as unknown as WithPaths).specUriPath(spec, action);
-    const url = new URL(path.replace(/^https?:\/\/[^/]+/, '') + (query && [...query].length ? `?${query}` : ''), server);
+    const url = new URL(pathAndQuery, server);
     const opts: RequestOptions = { method, headers: { Accept: 'application/json' } };
     if (body !== undefined) Object.assign(opts.headers!, { 'Content-Type': contentType, 'Content-Length': Buffer.byteLength(body) });
     await this.kc.applyToHTTPSOptions(opts);

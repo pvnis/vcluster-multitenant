@@ -1,0 +1,107 @@
+# The tenant UI, in tenant-system on midori-eye-0, from the controller's image.
+#
+#   sed s/IMAGE_TAG/$(./build-image.sh)/ ui.yaml | kubectl apply -f -
+#
+# Needs Secret tenant-system/tenant-ui-users (see ../README.md, "The UI").
+#
+# PRIVILEGE: unlike the controller it is NOT cluster-admin. It can
+#   - read and write Tenant objects (that is how it does anything at all:
+#     the controller turns them into tenants);
+#   - read Secrets in tenant-system (kubeconfigs and credentials to hand over,
+#     its own users);
+#   - read ResourceQuotas and Nodes (usage and capacity).
+# Nothing else: it cannot touch a namespace, pod, policy or vCluster directly.
+#
+# Reach: NodePort 30310 on any node, plain HTTP (no Octavia, no certificate
+# infrastructure -- the same as Grafana). The CiliumNetworkPolicy admits only
+# traffic from outside the cluster and from the nodes; no pod, tenant or
+# platform, can open a connection to it (tenants were already refused by
+# ../../manifests/midori/platform-guard.yaml).
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: tenant-ui, namespace: tenant-system }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: tenant-ui }
+rules:
+- apiGroups: [midori.phoenix]
+  resources: [tenants]
+  verbs: [get, list, watch, create, update, patch, delete]
+- apiGroups: [""]
+  resources: [resourcequotas, nodes]
+  verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: tenant-ui }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: tenant-ui }
+subjects: [{ kind: ServiceAccount, name: tenant-ui, namespace: tenant-system }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: tenant-ui-secrets, namespace: tenant-system }
+rules:
+- apiGroups: [""]
+  resources: [secrets]
+  verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: tenant-ui-secrets, namespace: tenant-system }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: tenant-ui-secrets }
+subjects: [{ kind: ServiceAccount, name: tenant-ui, namespace: tenant-system }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: tenant-ui, namespace: tenant-system }
+spec:
+  replicas: 1          # sessions live in memory
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: tenant-ui } }
+  template:
+    metadata:
+      labels: { app: tenant-ui }
+    spec:
+      serviceAccountName: tenant-ui
+      nodeSelector: { midori.role: observability }
+      tolerations: [{ key: midori.role, operator: Equal, value: observability, effect: NoSchedule }]
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, seccompProfile: { type: RuntimeDefault } }
+      containers:
+      - name: ui
+        image: registry.midori/tenant-controller:IMAGE_TAG
+        command: [node, src/ui/server.ts]
+        env:
+        - { name: UI_PORT, value: "8080" }
+        - { name: UI_DIR, value: /app/ui }
+        - { name: GRAFANA_PUBLIC_URL, value: "http://10.30.30.204:30300" }
+        ports: [{ name: http, containerPort: 8080 }]
+        readinessProbe: { httpGet: { path: /healthz, port: 8080 } }
+        livenessProbe: { httpGet: { path: /healthz, port: 8080 }, periodSeconds: 30 }
+        resources:
+          requests: { cpu: 20m, memory: 96Mi }
+          limits: { memory: 256Mi }
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities: { drop: [ALL] }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: tenant-ui, namespace: tenant-system }
+spec:
+  type: NodePort
+  selector: { app: tenant-ui }
+  ports: [{ port: 80, targetPort: 8080, nodePort: 30310 }]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata: { name: tenant-ui-ingress, namespace: tenant-system }
+spec:
+  endpointSelector: { matchLabels: { app: tenant-ui } }
+  ingress:
+  # Clients outside the cluster (world) via the NodePort on the pod's own
+  # node, or SNATed from another node (remote-node); the kubelet's probes and
+  # the local node (host).
+  - fromEntities: [world, remote-node, host]
+    toPorts: [{ ports: [{ port: "8080", protocol: TCP }] }]

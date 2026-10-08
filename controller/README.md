@@ -15,7 +15,9 @@ when asked:
 | observability | its Prometheus label proxy; its Grafana org, user, datasources, dashboards |
 | credentials | one Secret with its S3 key and Grafana login |
 
-Everything below runs on midori-cp-0 with the host kubeconfig. The
+There are two ways in: the **web UI** at http://&lt;any node&gt;:30310 (see
+[The UI](#the-ui)), and `kubectl` on Tenant objects. Everything below runs on
+midori-cp-0 with the host kubeconfig. The
 controller itself is `tenant-system/tenant-controller` on midori-eye-0.
 History of how it was built and adopted: [NOTES.md](NOTES.md).
 
@@ -47,6 +49,56 @@ kubectl get tenant tenant-nv-a -o json | jq '.status.conditions[] | "\(.type)=\(
 
 The repo's copy of each live Tenant is in [`deploy/tenants/`](deploy/tenants/);
 keep it in step (`kubectl diff -f deploy/tenants/<tenant>.yaml` shows any gap).
+
+## The UI
+
+**http://&lt;any node&gt;:30310** (e.g. http://10.30.30.226:30310). Sign in as
+`admin`; the password is in `~/midori-build/tenant-ui-admin` on cp-0.
+
+- **Capacity**: GPUs, GPU memory, CPU and memory (DRAM) of the GPU nodes,
+  what pods have requested, and what the tenants' quotas add up to, flagged
+  *overcommitted* when the quotas exceed the hardware. "Requested" is quota
+  accounting, not measured use (that is Grafana's job); pods that take whole
+  GPUs request no GPU memory.
+- **Tenants**: status, mode, drift, GPU / CPU / memory use against quota,
+  network, API endpoint. Refreshes every 5 seconds.
+- **A tenant**: its spec, every quota line, the controller's conditions and
+  any drift; **Show credentials** (Grafana login, S3 key) and **Download
+  kubeconfig** for the hand-over; **Edit**; **Switch to Observe / Manage**;
+  **Delete…**, which asks for the tenant's name to be typed. In Manage that
+  destroys the tenant; in Observe it only stops managing it.
+- **New tenant**: the same fields as the [Spec reference](#spec-reference);
+  empty CPU / memory / pods / PVCs keep the defaults.
+
+It only ever writes Tenant objects; the controller does the rest, exactly as
+with `kubectl`. Both can be used side by side.
+
+**Users** are entries in Secret `tenant-system/tenant-ui-users`: key = user
+name, value = a scrypt hash. To add or reset one (the password is read from
+stdin, so it never reaches shell history or the process list):
+
+```bash
+H=$(printf '%s' 'a-password-of-12-or-more' | node src/ui/hash-password.ts)
+kubectl -n tenant-system patch secret tenant-ui-users --type merge -p "{\"stringData\":{\"alice\":\"$H\"}}"
+# remove: kubectl -n tenant-system patch secret tenant-ui-users --type json -p '[{"op":"remove","path":"/data/alice"}]'
+```
+
+New and changed users work at the next login; no restart. Every login,
+create, update, delete, credential view and kubeconfig download is logged:
+
+```bash
+kubectl -n tenant-system logs deploy/tenant-ui | grep '"audit":true'
+```
+
+**Security**: the UI runs with its own ServiceAccount, which can write
+Tenants and read Secrets in tenant-system, quotas and nodes, and nothing
+else; it is not cluster-admin (the controller is). Sessions are
+HttpOnly/SameSite=Strict cookies held in memory (a restart logs everyone
+out); writes also need a custom header and a same-origin Origin (CSRF); the
+login backs off after five failures from one address. No pod -- tenant or
+platform -- can connect to it. It is **plain HTTP**, like Grafana, because
+midori has no certificate infrastructure: use it from the project network
+only.
 
 ## Create a tenant
 
@@ -247,14 +299,20 @@ It is applied to every Managed tenant within one pass. To preview first, put
 the tenants in `Observe`, restart, read the drift, then switch them back
 one by one.
 
-**After changing the controller's code:**
+**After changing the controller's or the UI's code** (one image, two
+Deployments):
 
 ```bash
 npm test && npx tsc --noEmit
 TAG=$(deploy/build-image.sh)                 # no docker: crane, pushed to registry.midori
 kubectl apply -f deploy/crd.yaml             # if the CRD changed
 sed s/IMAGE_TAG/$TAG/ deploy/controller.yaml | kubectl apply -f -
+sed s/IMAGE_TAG/$TAG/ deploy/ui.yaml | kubectl apply -f -
+test/ui-api.sh http://10.30.30.54:30310       # login, CSRF, validation, headers ...
 ```
+
+`test/ui-screens.mjs` screenshots every screen (light, dark, phone) and
+reports console and CSP errors; its header says how to run it.
 
 **A read-only check against the live cluster**, from cp-0. Every Tenant is
 treated as Observe and nothing is written, not even status; the drift is
@@ -271,9 +329,9 @@ applies to Managed tenants.)
 
 - Install the Phoenix Serving platform (or any add-on) into a tenant.
 - Put S3 credentials inside a tenant's vCluster.
-- Warn when the tenants' quotas together exceed the cluster.
-- A UI (phase 2).
-- Leader election: run exactly one replica.
+- Leader election: run exactly one replica (the UI too: its sessions are in
+  memory).
+- SSO for the UI; it has its own users.
 
 Before trusting a change to the controller or its templates against the
 live tenants, run `--observe` (above) and read the drift.
