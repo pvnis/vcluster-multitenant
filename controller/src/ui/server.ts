@@ -23,7 +23,7 @@ import type { V1Secret } from '@kubernetes/client-node';
 import { Kube, isNotFound } from '../kube.ts';
 import { ALLOW_DELETE, GROUP, VERSION, type Tenant } from '../types.ts';
 import { Auth } from './auth.ts';
-import { Invalid, NAME_RE, capacity, newTenant, parseSpec, specPatch, tenantView } from './model.ts';
+import { Invalid, NAME_RE, capacity, carryOver, newTenant, parseSpec, specPatch, tenantView } from './model.ts';
 
 const PORT = Number(process.env.UI_PORT ?? 8080);
 const STATIC = process.env.UI_DIR ?? join(import.meta.dirname, '../../ui');
@@ -168,8 +168,8 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     return send(res, 200, tenantView(t, quotas.items.find((q) => q.metadata?.name === 'tenant-quota')));
   }
   if (!sub && method === 'PUT') {
-    await getTenant(name);
-    const spec = parseSpec((await body(req)).spec);
+    const existing = await getTenant(name);
+    const spec = carryOver(existing.spec, parseSpec((await body(req)).spec));
     await kube.patchTenant(name, specPatch(spec));
     audit(user, 'update', name, { spec });
     return send(res, 200, { name });

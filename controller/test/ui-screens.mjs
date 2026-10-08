@@ -27,7 +27,9 @@ for (const scheme of ['light', 'dark']) {
   // the bars must have width (the CSP would silently drop style attributes)
   const widths = await page.$$eval('.bar > .u', (els) => els.map((e) => e.style.width));
   problems.push(`bar widths: ${widths.filter((w) => w && w !== '0%').length} of ${widths.length} non-zero`);
-  await page.click('#tenant-rows tr:has-text("tenant-phoenix-serving")');
+  // Whatever tenants exist: the detail view uses the first row, the delete
+  // dialog the last (no tenant names are assumed).
+  await page.click('#tenant-rows tr:first-child');
   await page.waitForSelector('#detail[open]');
   await page.screenshot({ path: `${OUT}/3-detail.png` });
   await page.click('text=Show credentials');
@@ -41,9 +43,10 @@ for (const scheme of ['light', 'dark']) {
   await page.fill('#editor-form [name=name]', 'tenant-demo'); await page.fill('#editor-form [name=gpus]', '2');
   await page.screenshot({ path: `${OUT}/5-new-tenant.png` });
   await page.click('#editor [data-close]');
-  await page.click('#tenant-rows tr:has-text("tenant-nv-b")');
+  await page.click('#tenant-rows tr:last-child');
   await page.click('text=Delete…');
-  await page.fill('#deleter-form [name=confirm]', 'tenant-nv');
+  const victim = await page.textContent('#deleter-name');
+  await page.fill('#deleter-form [name=confirm]', victim.slice(0, -2));  // a partial name: must stay disabled
   await page.screenshot({ path: `${OUT}/6-delete.png` });
   problems.push(`delete button enabled with partial name: ${await page.isEnabled('#deleter-submit')}`);
   await page.click('#deleter [data-close]');

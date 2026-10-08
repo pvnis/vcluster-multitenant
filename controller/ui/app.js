@@ -138,8 +138,9 @@ function renderCapacity() {
   // "Requested" is quota accounting (what pods asked for), not measured
   // use -- measured use is Grafana's job.
   const cards = [
-    ['GPUs', c.gpus, 'count', 'cards', null],
+    ['GPU attachments', c.gpus, 'count', 'slots', `On ${c.cards} cards; up to ${c.cards ? Math.round(c.gpus.capacity / c.cards) : 0} pods share each. Whole-GPU pods fill a card's slots for sharing.`],
     ['GPU memory', c.gpuMemoryMiB, 'mib', '', 'Pods that take whole cards request no GPU memory and are not counted here.'],
+    ['GPU time', c.gpuCores, 'count', '', '100 = one card\u2019s time. Only pods that request nvidia.com/gpucores count.'],
     ['CPU requests', c.cpu, 'cpu', 'cores', null],
     ['Memory requests (DRAM)', c.memory, 'memory', '', null],
   ].filter(([, line]) => line);
@@ -183,7 +184,8 @@ function renderTenants() {
 // ---------- detail -------------------------------------------------------------------
 
 const QUOTA_ORDER = [
-  ['requests.nvidia.com/gpu', 'GPUs', 'count'], ['requests.nvidia.com/gpumem', 'GPU memory', 'mib'],
+  ['requests.nvidia.com/gpu', 'GPU attachments', 'count'], ['requests.nvidia.com/gpumem', 'GPU memory', 'mib'],
+  ['requests.nvidia.com/gpucores', 'GPU time (100 = one card)', 'count'],
   ['requests.cpu', 'CPU requests', 'cpu'], ['limits.cpu', 'CPU limits', 'cpu'],
   ['requests.memory', 'Memory requests', 'memory'], ['limits.memory', 'Memory limits', 'memory'],
   ['pods', 'Pods', 'count'], ['persistentvolumeclaims', 'PVCs', 'count'],
@@ -293,7 +295,7 @@ let memTouched = false;  // has the user typed a GPU memory value themselves
 function gpuHint() {
   const f = $('#editor-form');
   const mib = Number(f.gpuMemoryMiB.value || 0);
-  $('#gpumem-hint').textContent = `= ${(mib / A6000_MIB).toFixed(2).replace(/\.00$/, '')} × RTX A6000 (${A6000_MIB} MiB each). Pods without a GPU memory limit take whole cards.`;
+  $('#gpumem-hint').textContent = `GPU memory = ${(mib / A6000_MIB).toFixed(2).replace(/\.00$/, '')} × RTX A6000 (${A6000_MIB} MiB each). Pods without a GPU memory limit take whole cards.`;
 }
 
 function openEditor(t) {
@@ -308,7 +310,7 @@ function openEditor(t) {
   $('#name-field').hidden = !!t;
   if (t) {
     const s = t.spec, q = s.quota;
-    f.gpus.value = q.gpus; f.gpuMemoryMiB.value = q.gpuMemoryMiB;
+    f.gpus.value = q.gpus; f.gpuMemoryMiB.value = q.gpuMemoryMiB; f.gpuCores.value = q.gpuCores ?? '';
     f.cpuRequests.value = q.cpu?.requests ?? ''; f.cpuLimits.value = q.cpu?.limits ?? '';
     f.memRequests.value = q.memory?.requests ?? ''; f.memLimits.value = q.memory?.limits ?? '';
     f.pods.value = q.pods ?? ''; f.pvcs.value = q.persistentVolumeClaims ?? '';
@@ -323,7 +325,8 @@ function openEditor(t) {
 
 $('#new-tenant').addEventListener('click', () => openEditor(null));
 $('#editor-form').gpus.addEventListener('input', (e) => {
-  if (!memTouched) e.target.form.gpuMemoryMiB.value = Number(e.target.value || 0) * A6000_MIB;
+  // Until the user sets it: one card's memory per attachment, at most all four cards.
+  if (!memTouched) e.target.form.gpuMemoryMiB.value = Math.min(Number(e.target.value || 0), 4) * A6000_MIB;
   gpuHint();
 });
 $('#editor-form').gpuMemoryMiB.addEventListener('input', () => { memTouched = true; gpuHint(); });
@@ -334,7 +337,7 @@ $('#editor-form').addEventListener('submit', async (e) => {
   const spec = {
     management: f.management.value,
     quota: {
-      gpus: f.gpus.value, gpuMemoryMiB: f.gpuMemoryMiB.value,
+      gpus: f.gpus.value, gpuMemoryMiB: f.gpuMemoryMiB.value, gpuCores: f.gpuCores.value,
       cpu: { requests: f.cpuRequests.value, limits: f.cpuLimits.value },
       memory: { requests: f.memRequests.value, limits: f.memLimits.value },
       pods: f.pods.value, persistentVolumeClaims: f.pvcs.value,

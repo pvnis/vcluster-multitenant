@@ -84,6 +84,8 @@ export class Templates {
       set('limits.memory', q.memory?.limits);
       set('pods', q.pods);
       set('persistentvolumeclaims', q.persistentVolumeClaims);
+      // GPU time is unlimited unless the Tenant sets it (no template default).
+      set('requests.nvidia.com/gpucores', q.gpuCores);
     }
     return {
       present: {

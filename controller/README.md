@@ -112,7 +112,7 @@ metadata:
 spec:
   management: Manage            # the default is Observe, which creates nothing
   quota:
-    gpus: 2                     # whole GPUs the tenant may hold at once (0-4)
+    gpus: 2                     # GPU attachments: GPU pods x their GPUs (0-40)
     gpuMemoryMiB: 92136         # GPU memory, MiB (an A6000 has 46068)
 ```
 
@@ -181,6 +181,52 @@ next pass; change the Tenant instead.
 and 125.6 GiB of memory between them; the tenants' quotas already add up to
 more (`tenant-phoenix-serving` alone may request 96 GiB). Lowering a quota
 below what a tenant uses evicts nothing; it only refuses new pods.
+
+## Fractions of a GPU
+
+A pod asks for GPU with three resources (HAMi places it, gVisor enforces it):
+
+| resource | meaning |
+| --- | --- |
+| `nvidia.com/gpu` | how many GPUs the pod **attaches** to (an integer) |
+| `nvidia.com/gpumem` | GPU memory, MiB, **on each** of those GPUs; the sandbox sees exactly that much and allocations past it fail |
+| `nvidia.com/gpucores` | share of GPU **time**, 0-100, re-divided continuously; idle neighbours cost nothing |
+
+A fraction is one GPU plus memory and/or time:
+
+```yaml
+resources:
+  limits:
+    nvidia.com/gpu: 1          # one card ...
+    nvidia.com/gpumem: 20480   # ... 20 GiB of its 46 GiB
+    nvidia.com/gpucores: 50    # ... half its time when busy
+```
+
+Up to 10 pods share a card. A pod that names no `gpumem` takes the
+**whole** card, and HAMi will not put a fractional pod on a card a whole-GPU
+pod holds -- so whole-GPU pods anywhere block sharing on their cards.
+
+The tenant's quota follows the same split:
+
+- `quota.gpus` counts **attachments**, not cards: three pods sharing one
+  card use 3. Up to 40 (4 cards x 10 shares). Set it generously for a tenant
+  running many small GPU pods.
+- `quota.gpuMemoryMiB` bounds the GPU memory its pods request: the
+  fractional axis. (A multi-GPU pod's `gpumem` is charged once, though it gets
+  that much on each card; gVisor still enforces it per card.)
+- `quota.gpuCores` (optional) bounds the GPU time its pods request; 100 = one
+  card's time.
+
+Tested on midori: a tenant with 6 attachments, 46068 MiB and gpuCores 100
+ran pods asking 60, 60 and 30 of GPU time; the second was refused by the
+host quota (`exceeded quota ... requests.nvidia.com/gpucores`), the others
+admitted (90 of 100), each with its gVisor memory limit and weight. Earlier,
+two tenant pods sharing one A6000 at 75/25 split its compute 2.66 : 1.
+
+The UI's capacity counts attachments against slots (40), and cannot tell a
+whole-card attachment from a shared one; a cluster whose four cards are all
+held whole reads "4 / 40 slots" and still has room for no fractional pod.
+Grafana's "GPU memory held" and DCGM panels show the physical picture.
 
 ## Phoenix Serving in a tenant
 
@@ -253,8 +299,9 @@ Do that one tenant at a time and check the tenant's workloads after each.
 | field | default | meaning |
 | --- | --- | --- |
 | `management` | `Observe` | `Manage` applies; `Observe` only reports drift |
-| `quota.gpus` | required | whole GPUs held at once, 0-4 |
+| `quota.gpus` | required | GPU **attachments** (sum of pods' `nvidia.com/gpu`), 0-40; see [Fractions of a GPU](#fractions-of-a-gpu) |
 | `quota.gpuMemoryMiB` | required | GPU memory, MiB, up to 184272 |
+| `quota.gpuCores` | unlimited | GPU time (sum of pods' `nvidia.com/gpucores`), 100 = one card |
 | `quota.cpu.requests` / `.limits` | 12 / 24 | CPU cores on the GPU nodes |
 | `quota.memory.requests` / `.limits` | 48Gi / 80Gi | system memory (DRAM) |
 | `quota.pods` | 30 | pods |

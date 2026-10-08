@@ -101,3 +101,10 @@ test('quota: set lines override the template, unset lines keep it', () => {
   assert.deepEqual([b['requests.cpu'], b['limits.cpu'], b['requests.memory'], b['limits.memory']], ['12', '24', '48Gi', '80Gi']);
 });
 
+test('quota: gpuCores becomes requests.nvidia.com/gpucores, absent when unset', () => {
+  const hardOf = (spec: Record<string, unknown>) => (T.render(tenant('tenant-q', spec)).present.Quota.find((o) => o.kind === 'ResourceQuota') as any).spec.hard;
+  assert.equal(hardOf({ quota: { gpus: 10, gpuMemoryMiB: 46068, gpuCores: 150 } })['requests.nvidia.com/gpucores'], '150');
+  assert.equal(hardOf({ quota: { gpus: 10, gpuMemoryMiB: 46068, gpuCores: 150 } })['requests.nvidia.com/gpu'], '10');
+  assert.ok(!('requests.nvidia.com/gpucores' in hardOf({ quota: { gpus: 1, gpuMemoryMiB: 1 } })));
+});
+

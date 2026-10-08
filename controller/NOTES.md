@@ -115,3 +115,29 @@ could not:
 And scrypt at N = 2^15 needs exactly Node's default 32 MiB limit, which it
 refuses; the unit test had used a small N for speed and missed it. It now
 tests the real cost.
+
+## Fractional GPUs in the quota (2026-10-08)
+
+`quota.gpus` was capped at 4, as if it counted cards. It counts
+attachments (HAMi's `nvidia.com/gpu` per pod), so the cap made a tenant
+unable to run more than four GPU pods however small. Now up to 40 (4 cards x
+10 shares, read from HAMi's register annotation), plus an optional
+`quota.gpuCores` (`requests.nvidia.com/gpucores`). Tested on a scratch tenant
+(6 attachments, gpuCores 100): pods asking 60, 60, 30 of GPU time -> the
+second refused by the host quota, the others admitted with their gVisor
+memory limit and weight. They stayed Pending ("2 NodeUnfitPod"):
+tenant-phoenix-serving's whole-GPU pods held all four cards, which is the
+other half of sharing.
+
+The UI's capacity card now counts attachments against slots and shows GPU
+time; it cannot tell whole-card from shared attachments without reading
+every pod's HAMi allocation (wider RBAC than the UI has), which is recorded
+as a limitation rather than granted.
+
+Found on the way: **a UI edit dropped a pinned API NodePort.** The form has
+no port field and the patch sends absent optional fields as null; the admin's
+edit of tenant-nv-a at 13:47 UTC unpinned 31943 (harmless only because the
+controller kept the port from status and the release). Fields the form does
+not show are now carried over (unit-tested, and checked live). The audit
+trail of that edit came from Loki: the UI pod's own log was gone after a
+redeploy, but Alloy had shipped it.

@@ -17,8 +17,9 @@ export type Management = 'Observe' | 'Manage';
 export interface TenantSpec {
   management: Management;
   quota: {
-    gpus: number;
+    gpus: number;          // GPU attachments (sum of nvidia.com/gpu), not cards
     gpuMemoryMiB: number;
+    gpuCores?: number;     // optional: sum of nvidia.com/gpucores (100 = one card's time)
     // Optional; unset keeps the value in manifests/midori/tenant-quota.yaml.
     // Kubernetes quantities ("20", "96Gi").
     cpu?: { requests?: string; limits?: string };

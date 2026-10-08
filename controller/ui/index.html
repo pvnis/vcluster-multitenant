@@ -42,7 +42,7 @@
         <table class="tenants">
           <thead>
             <tr>
-              <th>Tenant</th><th>Status</th><th>GPUs</th><th>CPU (requests)</th><th>Memory (requests)</th><th>Network</th><th>API</th><th></th>
+              <th>Tenant</th><th>Status</th><th>GPU attach.</th><th>CPU (requests)</th><th>Memory (requests)</th><th>Network</th><th>API</th><th></th>
             </tr>
           </thead>
           <tbody id="tenant-rows"></tbody>
@@ -80,10 +80,12 @@
         <fieldset class="span2">
           <legend>GPU</legend>
           <div class="row">
-            <label>GPUs <input name="gpus" type="number" min="0" max="4" step="1" value="1" required></label>
+            <label>GPU attachments <input name="gpus" type="number" min="0" max="40" step="1" value="1" required></label>
             <label>GPU memory (MiB) <input name="gpuMemoryMiB" type="number" min="0" max="184272" step="1" value="46068" required></label>
+            <label>GPU time <input name="gpuCores" type="number" min="0" max="400" step="1" placeholder="unlimited"></label>
           </div>
           <small class="muted" id="gpumem-hint"></small>
+          <small class="muted">Attachments count GPU pods, not cards: a pod sharing a card (with <code>nvidia.com/gpumem</code> or <code>nvidia.com/gpucores</code>) counts 1. Up to 10 pods share a card. GPU time: 100 = one card’s time.</small>
         </fieldset>
 
         <fieldset class="span2">

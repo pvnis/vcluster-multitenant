@@ -51,8 +51,17 @@ spec:
                 type: object
                 required: [gpus, gpuMemoryMiB]
                 properties:
-                  gpus: { type: integer, minimum: 0, maximum: 4 }
+                  # GPU ATTACHMENTS, not cards: the sum of the tenant's pods'
+                  # nvidia.com/gpu. A pod sharing a card (with gpumem and/or
+                  # gpucores) still counts 1, so this bounds how many GPU pods
+                  # a tenant may run; up to 40 = 4 cards x HAMi's 10 shares.
+                  gpus: { type: integer, minimum: 0, maximum: 40 }
+                  # GPU memory, MiB, summed over the tenant's pods'
+                  # nvidia.com/gpumem: the fractional axis.
                   gpuMemoryMiB: { type: integer, minimum: 0, maximum: 184272 }
+                  # Optional: GPU time, summed over pods' nvidia.com/gpucores
+                  # (100 = one whole card's time). Unset = not limited.
+                  gpuCores: { type: integer, minimum: 0, maximum: 400 }
                   # Optional. Unset keeps manifests/midori/tenant-quota.yaml's
                   # value. A quota caps a tenant; it reserves nothing, and
                   # limits above node capacity are overcommit.

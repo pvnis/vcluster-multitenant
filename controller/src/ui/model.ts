@@ -28,7 +28,7 @@ export function parseSpec(input: any): TenantSpec {
   const q = input?.quota ?? {};
   const spec: TenantSpec = {
     management: input?.management === 'Observe' ? 'Observe' : 'Manage',
-    quota: { gpus: int(q.gpus, 'GPUs', 0, 4), gpuMemoryMiB: int(q.gpuMemoryMiB, 'GPU memory (MiB)', 0, 4 * GPU_MIB) },
+    quota: { gpus: int(q.gpus, 'GPU attachments', 0, 40), gpuMemoryMiB: int(q.gpuMemoryMiB, 'GPU memory (MiB)', 0, 4 * GPU_MIB) },
     network: { internet: !!input?.network?.internet },
     controlPlane: { size: input?.controlPlane?.size === 'large' ? 'large' : 'small' },
     s3: { enabled: input?.s3?.enabled !== false },
@@ -39,6 +39,7 @@ export function parseSpec(input: any): TenantSpec {
   const memory = { requests: opt(q.memory?.requests, MEM_RE, 'Memory requests', '"96Gi"'), limits: opt(q.memory?.limits, MEM_RE, 'Memory limits', '"160Gi"') };
   if (cpu.requests || cpu.limits) spec.quota.cpu = Object.fromEntries(Object.entries(cpu).filter(([, v]) => v));
   if (memory.requests || memory.limits) spec.quota.memory = Object.fromEntries(Object.entries(memory).filter(([, v]) => v));
+  if (q.gpuCores !== undefined && q.gpuCores !== '' && q.gpuCores !== null) spec.quota.gpuCores = int(q.gpuCores, 'GPU time', 0, 400);
   if (q.pods !== undefined && q.pods !== '' && q.pods !== null) spec.quota.pods = int(q.pods, 'Pods', 1, 1000);
   if (q.persistentVolumeClaims !== undefined && q.persistentVolumeClaims !== '' && q.persistentVolumeClaims !== null) {
     spec.quota.persistentVolumeClaims = int(q.persistentVolumeClaims, 'PVCs', 0, 1000);
@@ -52,6 +53,17 @@ export function newTenant(name: string, spec: TenantSpec): Tenant {
   return { apiVersion: `${GROUP}/${VERSION}`, kind: 'Tenant', metadata: { name }, spec };
 }
 
+// Spec fields the UI's form does not show must survive an edit. The form has
+// no API-port field, and specPatch() sends absent optional fields as null, so
+// without this an edit silently unpinned the API NodePort (seen on
+// tenant-nv-a; harmless only because the controller kept the port).
+export function carryOver(existing: Partial<TenantSpec> | undefined, spec: TenantSpec): TenantSpec {
+  if (spec.controlPlane.apiNodePort === undefined && existing?.controlPlane?.apiNodePort !== undefined) {
+    spec.controlPlane.apiNodePort = existing.controlPlane.apiNodePort;
+  }
+  return spec;
+}
+
 // A merge patch that makes the live spec equal `spec`: optional fields the
 // form left empty are sent as null, which removes them (back to defaults).
 export function specPatch(spec: TenantSpec): object {
@@ -60,7 +72,7 @@ export function specPatch(spec: TenantSpec): object {
     spec: {
       ...spec,
       quota: {
-        gpus: q.gpus, gpuMemoryMiB: q.gpuMemoryMiB,
+        gpus: q.gpus, gpuMemoryMiB: q.gpuMemoryMiB, gpuCores: q.gpuCores ?? null,
         cpu: q.cpu ?? null, memory: q.memory ?? null,
         pods: q.pods ?? null, persistentVolumeClaims: q.persistentVolumeClaims ?? null,
       },
@@ -95,18 +107,21 @@ export function tenantView(t: Tenant, rq: any) {
   };
 }
 
-// Physical capacity of the GPU nodes (gpu.vendor=nvidia): GPUs and their
-// memory from HAMi's register annotation (the device plugin advertises
-// virtual slots, not cards), CPU and memory from allocatable.
+// Capacity of the GPU nodes (gpu.vendor=nvidia), from HAMi's register
+// annotation: each card, its memory and its share count (how many pods may
+// attach to it). nvidia.com/gpu counts ATTACHMENTS, so its capacity is the
+// sum of share counts (4 cards x 10 = 40), with the cards reported apart.
+// CPU and memory from allocatable; GPU time is 100 per card.
 export function capacity(nodes: any[], quotas: any[], tenants: Tenant[]) {
-  let gpus = 0, gpuMemMiB = 0, cpu = 0, memory = 0;
+  let gpus = 0, cards = 0, gpuMemMiB = 0, cpu = 0, memory = 0;
   for (const n of nodes) {
     if (n.metadata?.labels?.['gpu.vendor'] !== 'nvidia') continue;
     cpu += toNumber(n.status?.allocatable?.cpu ?? '0');
     memory += toNumber(n.status?.allocatable?.memory ?? '0');
     try {
-      const devs = JSON.parse(n.metadata?.annotations?.['hami.io/node-nvidia-register'] ?? '[]') as { devmem: number }[];
-      gpus += devs.length;
+      const devs = JSON.parse(n.metadata?.annotations?.['hami.io/node-nvidia-register'] ?? '[]') as { devmem: number; count?: number }[];
+      cards += devs.length;
+      gpus += devs.reduce((a, d) => a + (d.count ?? 1), 0);
       gpuMemMiB += devs.reduce((a, d) => a + (d.devmem ?? 0), 0);
     } catch { /* not registered yet */ }
   }
@@ -118,8 +133,10 @@ export function capacity(nodes: any[], quotas: any[], tenants: Tenant[]) {
     .reduce((a, q) => a + toNumber(q.status?.used?.[k] ?? '0'), 0);
   const line = (k: string, cap: number) => ({ capacity: cap, quota: sum(k), used: used(k), overcommit: cap > 0 ? sum(k) / cap : null });
   return {
+    cards,
     gpus: line('requests.nvidia.com/gpu', gpus),
     gpuMemoryMiB: line('requests.nvidia.com/gpumem', gpuMemMiB),
+    gpuCores: line('requests.nvidia.com/gpucores', cards * 100),
     cpu: line('requests.cpu', cpu),
     memory: line('requests.memory', memory),
   };
