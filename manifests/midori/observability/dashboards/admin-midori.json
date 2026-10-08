@@ -402,7 +402,7 @@
     {
      "refId": "A",
      "expr": "DCGM_FI_DEV_FB_USED",
-     "legendFormat": "{{Hostname}} gpu{{gpu}}",
+     "legendFormat": "{{hostname}} gpu{{gpu}}",
      "datasource": {
       "type": "prometheus",
       "uid": "prom"
@@ -452,7 +452,7 @@
     {
      "refId": "A",
      "expr": "DCGM_FI_DEV_GPU_UTIL",
-     "legendFormat": "{{Hostname}} gpu{{gpu}}",
+     "legendFormat": "{{hostname}} gpu{{gpu}}",
      "datasource": {
       "type": "prometheus",
       "uid": "prom"
@@ -502,7 +502,7 @@
     {
      "refId": "A",
      "expr": "DCGM_FI_DEV_POWER_USAGE",
-     "legendFormat": "{{Hostname}} gpu{{gpu}}",
+     "legendFormat": "{{hostname}} gpu{{gpu}}",
      "datasource": {
       "type": "prometheus",
       "uid": "prom"
@@ -551,8 +551,8 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "sum by (instance) (rate(gpusched_cmds_ok_total[5m]))",
-     "legendFormat": "ok {{instance}}",
+     "expr": "sum by (instance) (rate(gpusched_cmds_ok_total[5m])) * on (instance) group_left (nodename) node_uname_info",
+     "legendFormat": "ok {{nodename}}",
      "datasource": {
       "type": "prometheus",
       "uid": "prom"
@@ -560,8 +560,8 @@
     },
     {
      "refId": "B",
-     "expr": "sum by (instance) (rate(gpusched_cmds_failed_total[5m]))",
-     "legendFormat": "failed {{instance}}",
+     "expr": "sum by (instance) (rate(gpusched_cmds_failed_total[5m])) * on (instance) group_left (nodename) node_uname_info",
+     "legendFormat": "failed {{nodename}}",
      "datasource": {
       "type": "prometheus",
       "uid": "prom"
@@ -569,8 +569,8 @@
     },
     {
      "refId": "C",
-     "expr": "sum by (instance) (rate(gpusched_restarts_teardown_total[5m]))",
-     "legendFormat": "teardown restarts {{instance}}",
+     "expr": "sum by (instance) (rate(gpusched_restarts_teardown_total[5m])) * on (instance) group_left (nodename) node_uname_info",
+     "legendFormat": "teardown restarts {{nodename}}",
      "datasource": {
       "type": "prometheus",
       "uid": "prom"
@@ -619,8 +619,8 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "gpusched_sandboxes",
-     "legendFormat": "{{instance}} {{pci}}",
+     "expr": "label_replace(gpusched_sandboxes * on (instance) group_left (nodename) node_uname_info, \"bus\", \"$1\", \"pci\", \"0+:(.+)\") * on (nodename, bus) group_left (gpu) (label_replace(label_replace(max by (hostname, pci_bus_id, gpu) (DCGM_FI_DEV_FB_USED), \"nodename\", \"$1\", \"hostname\", \"(.+)\"), \"bus\", \"$1\", \"pci_bus_id\", \"0+:(.+)\") * 0 + 1)",
+     "legendFormat": "{{nodename}} gpu{{gpu}}",
      "datasource": {
       "type": "prometheus",
       "uid": "prom"
@@ -934,8 +934,8 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "node_memory_MemAvailable_bytes",
-     "legendFormat": "{{instance}}",
+     "expr": "node_memory_MemAvailable_bytes * on (instance) group_left (nodename) node_uname_info",
+     "legendFormat": "{{nodename}}",
      "datasource": {
       "type": "prometheus",
       "uid": "prom"
@@ -984,8 +984,8 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"}",
-     "legendFormat": "{{instance}}",
+     "expr": "(node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"}) * on (instance) group_left (nodename) node_uname_info",
+     "legendFormat": "{{nodename}}",
      "datasource": {
       "type": "prometheus",
       "uid": "prom"

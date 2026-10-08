@@ -24,6 +24,16 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PROM = {"type": "prometheus", "uid": "prom"}
 LOKI = {"type": "loki", "uid": "loki"}
 
+# Node-exporter series (incl. the broker's textfile metrics) carry only
+# instance=<ip>:9100; this adds the node's name.
+NODENAME = '* on (instance) group_left (nodename) node_uname_info'
+# The broker names a GPU by PCI address (0000:00:05.0), DCGM by node + index
+# with pci_bus_id 00000000:00:05.0. This joins the two on node and bus, so a
+# GPU reads "midori-nv-0 gpu0" in every panel.
+GPU_INDEX = ('* on (nodename, bus) group_left (gpu) (label_replace(label_replace('
+             'max by (hostname, pci_bus_id, gpu) (DCGM_FI_DEV_FB_USED), "nodename", "$1", "hostname", "(.+)"), '
+             '"bus", "$1", "pci_bus_id", "0+:(.+)") * 0 + 1)')
+
 # Host pod name -> the tenant's own pod name, via kube-state-metrics.
 VPOD = ('* on (namespace, pod) group_left (vpod) '
         'label_replace(max by (namespace, pod, annotation_vcluster_loft_sh_object_name) '
@@ -200,13 +210,13 @@ def admin():
            (4, stat("Firing alerts", 'count(ALERTS{alertstate="firing", alertname!="Watchdog"}) or vector(0)',
                     thresholds=[{"color": "green", "value": None}, {"color": "orange", "value": 1}]))], h=5)
     b.row("GPUs (physical)")
-    b.add([(8, ts("GPU memory used", [('DCGM_FI_DEV_FB_USED', "{{Hostname}} gpu{{gpu}}")], unit="decmbytes")),
-           (8, ts("GPU utilisation", [('DCGM_FI_DEV_GPU_UTIL', "{{Hostname}} gpu{{gpu}}")], unit="percent")),
-           (8, ts("Power", [('DCGM_FI_DEV_POWER_USAGE', "{{Hostname}} gpu{{gpu}}")], unit="watt"))])
-    b.add([(8, ts("Broker commands / s", [('sum by (instance) (rate(gpusched_cmds_ok_total[5m]))', "ok {{instance}}"),
-                                          ('sum by (instance) (rate(gpusched_cmds_failed_total[5m]))', "failed {{instance}}"),
-                                          ('sum by (instance) (rate(gpusched_restarts_teardown_total[5m]))', "teardown restarts {{instance}}")])),
-           (8, ts("Sandboxes per GPU (broker)", [('gpusched_sandboxes', "{{instance}} {{pci}}")])),
+    b.add([(8, ts("GPU memory used", [('DCGM_FI_DEV_FB_USED', "{{hostname}} gpu{{gpu}}")], unit="decmbytes")),
+           (8, ts("GPU utilisation", [('DCGM_FI_DEV_GPU_UTIL', "{{hostname}} gpu{{gpu}}")], unit="percent")),
+           (8, ts("Power", [('DCGM_FI_DEV_POWER_USAGE', "{{hostname}} gpu{{gpu}}")], unit="watt"))])
+    b.add([(8, ts("Broker commands / s", [(f'sum by (instance) (rate(gpusched_cmds_ok_total[5m])) {NODENAME}', "ok {{nodename}}"),
+                                          (f'sum by (instance) (rate(gpusched_cmds_failed_total[5m])) {NODENAME}', "failed {{nodename}}"),
+                                          (f'sum by (instance) (rate(gpusched_restarts_teardown_total[5m])) {NODENAME}', "teardown restarts {{nodename}}")])),
+           (8, ts("Sandboxes per GPU (broker)", [(f'label_replace(gpusched_sandboxes {NODENAME}, "bus", "$1", "pci", "0+:(.+)") {GPU_INDEX}', "{{nodename}} gpu{{gpu}}")])),
            (8, ts("GPU memory sliced out, by tenant", [('sum by (namespace) (tenant:gpu_slice_mib)', "{{namespace}}")],
                   unit="decmbytes", stack=True, desc="Sum of nvidia.com/gpumem limits; compare with physical use above."))])
     b.row("Tenants")
@@ -218,8 +228,8 @@ def admin():
     b.add([(12, ts("Cilium drops by source", [('sum by (source, reason) (rate(hubble_drop_total[5m]))', "{{source}} {{reason}}")], unit="pps")),
            (12, ts("vCluster control-plane restarts (1h)", [('sum by (namespace) (increase(kube_pod_container_status_restarts_total{pod=~"tenant-.+-0"}[1h]))', "{{namespace}}")]))])
     b.row("Nodes")
-    b.add([(12, ts("Memory available", [('node_memory_MemAvailable_bytes', "{{instance}}")], unit="bytes")),
-           (12, ts("Root filesystem free", [('node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}', "{{instance}}")], unit="percentunit"))])
+    b.add([(12, ts("Memory available", [(f'node_memory_MemAvailable_bytes {NODENAME}', "{{nodename}}")], unit="bytes")),
+           (12, ts("Root filesystem free", [(f'(node_filesystem_avail_bytes{{mountpoint="/"}} / node_filesystem_size_bytes{{mountpoint="/"}}) {NODENAME}', "{{nodename}}")], unit="percentunit"))])
     return b.json()
 
 
