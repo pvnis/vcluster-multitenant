@@ -8,6 +8,12 @@ enforced by the sandbox rather than by anything they can reach.
 
 Verified end to end on `sensai` (k3s v1.36.2, one RTX 5070) on 2026-08-07.
 
+> **midori**, the multi-node cluster (two 2x RTX A6000 nodes on OpenStack),
+> is the current environment: [`manifests/midori/`](manifests/midori/README.md)
+> records how it was built, and its tenants are managed by the **tenant
+> controller**, one `Tenant` object per tenant --
+> [`controller/README.md`](controller/README.md) is the operator's guide.
+
 > **To stand up the *entire* stack** (gVisor, the NVIDIA open-driver fork, HAMi,
 > the device plugins, the in-tree webhook, the `gpu-scheduler`, and this tenancy
 > layer), start at **[`SETUP.md`](SETUP.md)** — the two-vendor full-stack recipe.

@@ -11,7 +11,11 @@ import { GROUP, PLURAL, VERSION, type Tenant } from './types.ts';
 
 const RESYNC_SECONDS = Number(process.env.RESYNC_SECONDS ?? 300);
 const TEMPLATE_DIR = process.env.TEMPLATE_DIR ?? '/templates';
-const ONCE = process.argv.includes('--once'); // reconcile everything once and exit
+// --once: reconcile every Tenant once, in its own mode, and exit.
+// --observe: the same, but every Tenant treated as Observe and nothing
+//   written at all (not even status) -- a safe dry run against the cluster.
+const READ_ONLY = process.argv.includes('--observe');
+const ONCE = READ_ONLY || process.argv.includes('--once');
 
 const kube = Kube.load();
 const templates = new Templates(TEMPLATE_DIR);
@@ -33,12 +37,12 @@ async function drain(): Promise<void> {
       queue.delete(name);
       try {
         const t = await get(name); // always the latest, never a stale event copy
-        if (t) await reconcileTenant(kube, templates, t);
+        if (t) await reconcileTenant(kube, templates, t, READ_ONLY);
       } catch (e) {
         log('reconcile failed', { tenant: name, error: e instanceof Error ? e.message : String(e) });
       }
     }
-    await globals();
+    if (!READ_ONLY) await globals();
   } finally {
     running = false;
   }
@@ -67,7 +71,7 @@ async function enqueueAll(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  log('starting', { resyncSeconds: RESYNC_SECONDS, templates: TEMPLATE_DIR, once: ONCE });
+  log('starting', { resyncSeconds: RESYNC_SECONDS, templates: TEMPLATE_DIR, once: ONCE, readOnly: READ_ONLY });
   if (ONCE) {
     await enqueueAll();
     return;

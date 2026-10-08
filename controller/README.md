@@ -1,191 +1,283 @@
-# midori tenant controller
+# midori tenant controller: operator's guide
 
-One object per tenant. The controller turns a `Tenant`
-(`midori.phoenix/v1alpha1`, cluster-scoped, `deploy/crd.yaml`) into everything
-the runbook used to do by hand across a dozen places, keeps it that way, and
-tears it all down again. Written in TypeScript on `@kubernetes/client-node`;
-Node 24 runs the `.ts` sources directly, so there is no build step.
+A tenant on midori is **one Kubernetes object**, a `Tenant`
+(`midori.phoenix/v1alpha1`, cluster-scoped). The tenant controller turns it
+into everything the tenant needs, keeps it that way, and tears it all down
+when asked:
 
-Built and adopted 2026-10-08. Phase 2 (a UI) is not built.
+| part | what the controller makes |
+| --- | --- |
+| namespace | `<tenant>`, labelled `gvisor=`, `tenant=<tenant>`, PSA `baseline` |
+| quota | ResourceQuota (GPUs, GPU memory, CPU, memory, pods, PVCs) and LimitRange |
+| network | ingress policies, the Cilium floor (standard, or public internet), the baseline allow, S3 and scrape allows, optionally the Gateway's ingress |
+| vCluster | the tenant's own Kubernetes API (Helm release, gVisor), and a kubeconfig for it |
+| S3 | the tenant's key on the read-only model gateway |
+| observability | its Prometheus label proxy; its Grafana org, user, datasources, dashboards |
+| credentials | one Secret with its S3 key and Grafana login |
 
-## Operating it
+Everything below runs on midori-cp-0 with the host kubeconfig. The
+controller itself is `tenant-system/tenant-controller` on midori-eye-0.
+History of how it was built and adopted: [NOTES.md](NOTES.md).
+
+## At a glance
 
 ```bash
-kubectl get tenants                       # mode, phase, GPUs, internet, API, drift
-kubectl get tenant tenant-nv-a -o yaml    # status.conditions, status.drift
+kubectl get tenants
+```
+```
+NAME                     MODE     PHASE   GPUS   INTERNET   API                          DRIFT   AGE
+tenant-nv-a              Manage   Ready   4      false      https://10.30.30.226:31943   0       39m
+tenant-nv-b              Manage   Ready   2      false      https://10.30.30.226:32043   0       39m
+tenant-phoenix-serving   Manage   Ready   4      true       https://10.30.30.226:32243   0       39m
 ```
 
-**Create a tenant** (here: 2 GPUs, public internet, a large control plane for
-Phoenix Serving, its Gateway exposed, the vLLM dashboard):
+- **MODE** `Manage`: the controller applies the spec. `Observe`: it only
+  reports what it would change (DRIFT) and writes nothing.
+- **PHASE** `Ready` (Manage, all parts applied), `Observing` (Observe),
+  `Degraded` (a part failed; see conditions), `Blocked` (deletion refused),
+  `Deleting`.
+- **API** is the tenant's Kubernetes API, on a NodePort any node serves.
+
+Details for one tenant:
+
+```bash
+kubectl get tenant tenant-nv-a -o yaml          # spec, status.conditions, status.drift
+kubectl get tenant tenant-nv-a -o json | jq '.status.conditions[] | "\(.type)=\(.status) \(.reason): \(.message)"'
+```
+
+The repo's copy of each live Tenant is in [`deploy/tenants/`](deploy/tenants/);
+keep it in step (`kubectl diff -f deploy/tenants/<tenant>.yaml` shows any gap).
+
+## Create a tenant
+
+Write the Tenant (save it in `deploy/tenants/` too) and apply it:
 
 ```yaml
 apiVersion: midori.phoenix/v1alpha1
 kind: Tenant
-metadata: { name: tenant-example }          # must start with tenant-, <= 32 chars
+metadata:
+  name: tenant-example          # must start with tenant-, at most 32 characters
 spec:
-  management: Manage                        # default Observe: changes nothing
+  management: Manage            # the default is Observe, which creates nothing
   quota:
-    gpus: 2                                 # whole GPUs a tenant may hold
-    gpuMemoryMiB: 92136                     # GPU memory (nvidia.com/gpumem)
-    # optional, unset = tenant-quota.yaml's value (12/24 CPU, 48/80Gi, 30 pods, 10 PVCs).
-    # CPU cores and system memory (DRAM), not GPU memory:
-    cpu: { requests: "20", limits: "36" }
-    memory: { requests: 96Gi, limits: 160Gi }
-    pods: 30
-    persistentVolumeClaims: 10
-  network: { internet: true }               # tenant-internet.yaml instead of the standard floor
-  controlPlane: { size: large }             # apiNodePort: allocated if omitted
-  gateway: { expose: true }                 # gateway-ingress.yaml
-  observability: { dashboards: [overview, serving] }
+    gpus: 2                     # whole GPUs the tenant may hold at once (0-4)
+    gpuMemoryMiB: 92136         # GPU memory, MiB (an A6000 has 46068)
 ```
-
-`kubectl apply` it; about a minute later it is `Ready`. Then:
 
 ```bash
-kubectl -n tenant-system get secret tenant-example-kubeconfig  -o jsonpath='{.data.config}' | base64 -d > tenant.kubeconfig
-kubectl -n tenant-system get secret tenant-example-credentials -o yaml   # S3 key, Grafana user/password
+kubectl apply -f deploy/tenants/tenant-example.yaml
+kubectl get tenant tenant-example -w            # Ready in about a minute
 ```
 
-**Change a tenant**: edit its spec (quota, internet, gateway, dashboards).
-The controller reconciles on every change and every 5 minutes, and owns
-what it applies: a hand edit of, say, the ResourceQuota is reverted on the
-next pass. A quota caps a tenant and reserves nothing; lowering it below
-current use evicts nothing, it only refuses new pods.
+Everything else has a default (see [Spec reference](#spec-reference)). The
+API NodePort is allocated from 31000 upward and shown in `API`.
 
-**Delete a tenant** destroys its control plane and data, so it takes two
-steps; a plain `kubectl delete` only reports `Blocked`:
+## Hand a tenant to its operator
+
+Three things, all from `tenant-system`:
+
+```bash
+T=tenant-example
+# 1. Its kubeconfig (cluster-admin of its own vCluster, nothing on the host)
+kubectl -n tenant-system get secret $T-kubeconfig -o jsonpath='{.data.config}' | base64 -d > $T.kubeconfig
+
+# 2. Its Grafana login: http://10.30.30.204:30300
+kubectl -n tenant-system get secret $T-credentials -o jsonpath='{.data.grafana-user}' | base64 -d; echo
+kubectl -n tenant-system get secret $T-credentials -o jsonpath='{.data.grafana-password}' | base64 -d; echo
+
+# 3. Its S3 key for model weights (s3://models/... via the read-only gateway)
+kubectl -n tenant-system get secret $T-credentials -o jsonpath='{.data.s3-access-key}' | base64 -d; echo
+kubectl -n tenant-system get secret $T-credentials -o jsonpath='{.data.s3-endpoint}' | base64 -d; echo
+```
+
+Pass these on over a private channel. What the operator should know:
+
+- Every pod they create runs under gVisor, whatever it asks for.
+- GPU pods ask for `nvidia.com/gpu` (and optionally `nvidia.com/gpumem` and
+  `nvidia.com/gpucores` for a slice); the slice is enforced by gVisor.
+- Without `network.internet`, the tenant has no internet and no external DNS;
+  model weights come from `s3://models/...` through the gateway.
+- `kubectl port-forward` cannot reach gVisor pods; use a Service.
+
+## Change a tenant
+
+Edit the Tenant and apply it again, or patch it:
+
+```bash
+# more GPUs
+kubectl patch tenant tenant-example --type merge -p '{"spec":{"quota":{"gpus":4,"gpuMemoryMiB":184272}}}'
+
+# CPU cores and system memory (DRAM) -- not GPU memory
+kubectl patch tenant tenant-example --type merge -p \
+  '{"spec":{"quota":{"cpu":{"requests":"20","limits":"36"},"memory":{"requests":"96Gi","limits":"160Gi"}}}}'
+
+# public internet on / off
+kubectl patch tenant tenant-example --type merge -p '{"spec":{"network":{"internet":true}}}'
+
+# expose a Phoenix Serving Gateway to clients outside the cluster
+kubectl patch tenant tenant-example --type merge -p '{"spec":{"gateway":{"expose":true}}}'
+```
+
+The controller applies within seconds of a change, and re-checks every
+tenant every 5 minutes.
+
+**The controller owns what it applies.** A hand edit of a tenant's
+ResourceQuota, network policies, proxy or Grafana org is reverted on the
+next pass; change the Tenant instead.
+
+**Quotas cap; they do not reserve.** The two GPU nodes have 4 GPUs, 32 CPU
+and 125.6 GiB of memory between them; the tenants' quotas already add up to
+more (`tenant-phoenix-serving` alone may request 96 GiB). Lowering a quota
+below what a tenant uses evicts nothing; it only refuses new pods.
+
+## Phoenix Serving in a tenant
+
+The controller makes the tenant; installing Phoenix Serving's platform into
+it is still a manual step. For a tenant with `controlPlane.size: large`
+(Phoenix's CRDs crash a small control plane) and `gateway.expose: true`:
+
+```bash
+T=tenant-example
+kubectl -n tenant-system get secret $T-kubeconfig -o jsonpath='{.data.config}' | base64 -d > ~/tenants/$T.kubeconfig
+cd ~/phoenix-serving && KUBECONFIG=~/tenants/$T.kubeconfig OBSERVABILITY_ENABLED=false ./scripts/setup.sh
+# the Gateway's NodePort, for clients outside the cluster:
+kubectl -n $T get svc -l gateway.networking.k8s.io/gateway-name=phoenix-serving-gateway -o jsonpath='{.items[0].spec.ports[0].nodePort}'
+```
+
+For models loaded from S3 rather than `hf://`, put the tenant's S3 key where
+KServe looks for it, in the namespace the model will use:
+
+```bash
+c(){ kubectl -n tenant-system get secret $T-credentials -o jsonpath="{.data.$1}" | base64 -d; }
+(umask 077; printf '%s,%s\n' "$(c s3-access-key)" "$(c s3-secret-key)" > /tmp/k)   # the newline matters: the script reads it with `read` under set -e
+KUBECONFIG=~/tenants/$T.kubeconfig NS=inference-serving ~/vcluster-multitenant/manifests/midori/phoenix/s3-credentials.sh /tmp/k; rm /tmp/k
+```
+
+See [`../manifests/midori/phoenix/README.md`](../manifests/midori/phoenix/README.md)
+for the model chart values and what to expect (READY stays
+`WaitingForGateway` even when it works; test with a request).
+
+## Delete a tenant
+
+Deleting destroys the tenant's control plane, its data and everything in
+it, so it takes two steps. A plain delete is refused:
 
 ```bash
 kubectl annotate tenant tenant-example midori.phoenix/allow-delete=true
 kubectl delete tenant tenant-example
 ```
 
-**Stop managing a tenant without touching it**: set `management: Observe`;
-deleting a Tenant in Observe leaves the tenant exactly as it is.
+Without the annotation the Tenant shows `Blocked` and nothing is touched.
+With it, the controller removes, in order: the Grafana org and user, the S3
+key, the proxy, the vCluster, the cluster-wide policies, the namespace (and
+its volume), the credentials and kubeconfig Secrets. About 20 seconds.
 
-## What one Tenant becomes
-
-| component | objects | from |
-| --- | --- | --- |
-| Namespace | namespace with `gvisor=`, `tenant=<name>`, PSA baseline | code |
-| Quota | ResourceQuota, LimitRange | `manifests/midori/tenant-quota.yaml` |
-| Network | ingress policies, Cilium floor (standard or internet), baseline allow, S3 allow, scrape allow, optional gateway ingress | `manifests/midori/tenant-netpol.yaml`, `manifests/cilium/tenant-floor.yaml` or `manifests/midori/tenant-internet.yaml`, `manifests/cilium/tenant-allow.yaml`, `tenant-s3-allow.yaml`, `observability/tenant-scrape-allow.yaml`, `phoenix/gateway-ingress.yaml` |
-| VCluster | Helm release of vcluster 0.36.1, kubeconfig Secret | `values/tenant.yaml`, `nv-tenant.yaml`, `midori-tenant.yaml` + port/size overlay |
-| S3 | the tenant's entry in `s3-gateway/s3-gateway-tenant-keys`, a gateway restart | |
-| Metrics | `prom-proxy-<tenant>` (prom-label-proxy) | `observability/tenant-prom-proxy.yaml` |
-| Grafana | org, user (Editor, sole membership), Prometheus + Loki datasources, dashboards; the admin org's Loki tenant list | `observability/dashboards/*.json` |
-
-The templates **are** the runbook's manifests: `deploy/templates.sh` packs
-them into the `tenant-templates` ConfigMap, so the controller cannot render
-anything the runbook would not. After changing one, re-run it and restart the
-controller.
-
-Credentials for each tenant live in `tenant-system/<tenant>-credentials`;
-existing values are kept, so a key or password is generated only once.
+**To stop managing a tenant but keep it**, set `management: Observe` first;
+deleting a Tenant in Observe only removes the object and leaves the tenant
+exactly as it is.
 
 ## Observe and Manage
 
-`spec.management: Observe` (the default) never writes. For each object the
-controller asks the API server for a **server-side dry-run apply** and
-compares the result with the live object; whatever would change is listed in
-`status.drift` (`create`, `update` with the JSON paths, `delete`). For the
-vCluster it compares the Helm release's values; for Grafana it inspects the
-org, user, memberships, datasources and dashboards. `Manage` applies.
-
-Adopted tenants start in Observe so their drift can be reviewed before the
-controller writes anything. This is also how a change to a shared template
-reaches tenants: it shows up as drift on each, and takes effect tenant by
-tenant as each is switched to (or already is in) Manage.
-
-## Adoption of the running tenants (2026-10-08)
-
-`tenant-nv-a`, `tenant-nv-b` and `tenant-phoenix-serving` were described as
-Tenants in Observe (`deploy/tenants/`). Before any reconcile, three one-time
-migrations made shared state controller-friendly; each kept every existing
-key and password:
-
-1. **S3 gateway keys** moved from per-tenant `--auth-key=$(VAR)` flags in the
-   gateway's Deployment to Secret `s3-gateway-tenant-keys` (one entry per
-   tenant, digests checked equal), read as files at startup. The gateway now
-   **refuses to start with no keys**, because `rclone serve s3` with no
-   `--auth-key` serves without authentication (tested in a scratch pod both
-   ways). tenant-nv-b's existing key passed the full S3 test afterwards.
-2. **Credentials** imported into `tenant-system/<tenant>-credentials`: the
-   S3 key from the gateway, the Grafana password from cp-0; each password
-   logged in (200) and each key matched before the controller ran.
-3. **The admin org's Loki datasource** moved from `grafana-values.yaml` to a
-   Secret the controller maintains, loaded by Grafana's datasource sidecar.
-
-Then a resourceVersion snapshot of the 84 objects the controller could write
-was taken before and after each Observe pass, locally and in-cluster: **none
-changed**. The drift it reports is exactly what is real:
-
-| tenant | drift |
-| --- | --- |
-| tenant-nv-a, tenant-nv-b | both floor policies would gain the node-identity deny (`egressDeny` 2 -> 3): the security fix in `manifests/cilium/tenant-floor.yaml`; and a kubeconfig Secret to publish |
-| tenant-phoenix-serving | a kubeconfig Secret to publish (its floor already has the fix) |
-
-Each test-rendered vCluster values set equals its live release
-(`test/render.test.ts`), so switching an adopted tenant to Manage does not
-upgrade, and so does not restart, its control plane.
-
-## End-to-end test (tenant-e2e, Manage)
-
-From one object to `Ready` in 68 s, then checked against reality, not status:
-namespace labels, quota, LimitRange defaults, `allow-same-tenant`'s `from`,
-both floors with the node-identity deny, the proxy, the vCluster pod (gVisor),
-the published kubeconfig (nodes listed through it), the S3 key (gateway
-restarted to 4 keys; the full S3 test passed from inside the tenant with the
-published credentials), Grafana (login, sole Editor membership, dashboard,
-Prometheus pinned to the tenant), and the admin Loki header. Deletion without
-the annotation: `Blocked`, nothing touched. With it: teardown in 16 s; no
-namespace, PV, policy, proxy, Secret, gateway key, Grafana org or user left,
-and the admin Loki header updated.
-
-## Bugs found while building it
-
-- **`KubernetesObjectApi.patch` silently drops reserved-word fields.** The
-  library's typed models rename `from` and `default` to `_from` and
-  `_default`, and its serializer drops the real names, so an apply of
-  `allow-same-tenant` would have **lost its ingress `from` -- allowing every
-  source** -- and LimitRanges their defaults. Observe surfaced it as drift
-  on the first run. All reads, applies and deletes now go out as raw JSON;
-  the Manage e2e confirms both fields survive.
-- **One field manager across tenants deletes keys.** A server-side apply
-  declares all of a manager's fields, so writing tenant B's entry in the
-  shared keys Secret under the same manager as tenant A's would remove A's.
-  Each tenant's entry has its own manager.
-- **Deleting the last managed Tenant left it in the admin Loki header.** The
-  "no shared writes in Observe" rule also skipped the removal; once the
-  Secret exists the controller always keeps it current.
-
-## Limits, and what comes next
-
-- **No add-ons yet.** The Phoenix Serving platform (`setup.sh`) is still run
-  by hand into a new tenant; a `spec.addons` field is the next step.
-- **No S3 credentials inside the vCluster.** The controller publishes them in
-  `tenant-system`; putting them into the tenant (e.g. for KServe) is still
-  manual.
-- **cluster-admin.** Needed to install vClusters with Helm; see
-  `deploy/controller.yaml` for how it is contained.
-- **One replica, no leader election.** Never run two.
-- **The UI** is phase 2.
-- `manifests/midori/observability/grafana-tenants.py` is superseded for
-  Tenant-managed tenants; do not run it against them.
-
-## Build and deploy
+`Observe` never writes. For each part the controller asks the API server for
+a server-side **dry-run** of the apply and compares it with what is live;
+anything that would change is listed in `status.drift`:
 
 ```bash
-npm test                                           # renders the real manifests; vCluster values vs live releases
-npx tsc --noEmit
-TAG=$(deploy/build-image.sh)                       # no docker: crane, pushed to registry.midori
-kubectl apply -f deploy/crd.yaml
+kubectl get tenant tenant-nv-a -o json | jq -r '.status.drift[] | "\(.change) \(.object) \(.paths|join(" "))"'
+```
+
+Use it to adopt an existing tenant (describe it as a Tenant in Observe, read
+its drift, then switch), and to preview a change to a shared template. To
+switch:
+
+```bash
+kubectl patch tenant tenant-example --type merge -p '{"spec":{"management":"Manage"}}'
+```
+
+Do that one tenant at a time and check the tenant's workloads after each.
+
+## Spec reference
+
+| field | default | meaning |
+| --- | --- | --- |
+| `management` | `Observe` | `Manage` applies; `Observe` only reports drift |
+| `quota.gpus` | required | whole GPUs held at once, 0-4 |
+| `quota.gpuMemoryMiB` | required | GPU memory, MiB, up to 184272 |
+| `quota.cpu.requests` / `.limits` | 12 / 24 | CPU cores on the GPU nodes |
+| `quota.memory.requests` / `.limits` | 48Gi / 80Gi | system memory (DRAM) |
+| `quota.pods` | 30 | pods |
+| `quota.persistentVolumeClaims` | 10 | PVCs |
+| `network.internet` | `false` | public internet (`../manifests/midori/tenant-internet.yaml`); private ranges, nodes, the OpenStack VIP and the metadata service stay blocked |
+| `controlPlane.size` | `small` | `large` = 4 CPU / 4Gi control plane (needed for Phoenix Serving) |
+| `controlPlane.apiNodePort` | allocated | fixed NodePort for the tenant API |
+| `s3.enabled` | `true` | a key on the S3 gateway |
+| `gateway.expose` | `false` | open a Phoenix Serving Gateway to outside clients |
+| `observability.dashboards` | `[overview]` | add `serving` for the vLLM dashboard |
+
+## When something is wrong
+
+| symptom | look at |
+| --- | --- |
+| `Degraded` | `kubectl get tenant <t> -o yaml`: the condition with `reason: Error` names the part and the error |
+| `Blocked` | deletion without the annotation; annotate, or set `Observe` to keep the tenant |
+| a change does not take effect | `kubectl -n tenant-system logs deploy/tenant-controller` (one JSON line per reconcile) |
+| `DRIFT` > 0 in Manage | something changed the tenant behind the controller's back; it is put back on the next pass |
+| the controller pod is down | tenants keep working: it is not in their data path. Nothing is reconciled until it is back. |
+
+**Never delete the CRD** (`tenants.midori.phoenix`): it deletes every Tenant
+object. Each Managed one would then wait in `Blocked` (no annotation), so no
+tenant is destroyed, but recovering means re-applying `deploy/tenants/`.
+
+## Running the controller
+
+```bash
+kubectl -n tenant-system get pods                           # one replica, never two
+kubectl -n tenant-system logs deploy/tenant-controller -f
+```
+
+**After changing a shared template** (any manifest in
+[`deploy/templates.sh`](deploy/templates.sh)'s list):
+
+```bash
 deploy/templates.sh | kubectl apply -f -
+kubectl -n tenant-system rollout restart deploy/tenant-controller
+```
+
+It is applied to every Managed tenant within one pass. To preview first, put
+the tenants in `Observe`, restart, read the drift, then switch them back
+one by one.
+
+**After changing the controller's code:**
+
+```bash
+npm test && npx tsc --noEmit
+TAG=$(deploy/build-image.sh)                 # no docker: crane, pushed to registry.midori
+kubectl apply -f deploy/crd.yaml             # if the CRD changed
 sed s/IMAGE_TAG/$TAG/ deploy/controller.yaml | kubectl apply -f -
 ```
 
-Run it once locally against the cluster, Observe only, from cp-0:
+**A read-only check against the live cluster**, from cp-0. Every Tenant is
+treated as Observe and nothing is written, not even status; the drift is
+printed:
 
 ```bash
-TEMPLATE_DIR=test/.templates GRAFANA_URL=http://10.30.30.204:30300 node src/main.ts --once
+TEMPLATE_DIR=test/.templates GRAFANA_URL=http://10.30.30.204:30300 node src/main.ts --observe
 ```
+
+(`--once` instead reconciles each Tenant once in its own mode, so it
+applies to Managed tenants.)
+
+## What it does not do yet
+
+- Install the Phoenix Serving platform (or any add-on) into a tenant.
+- Put S3 credentials inside a tenant's vCluster.
+- Warn when the tenants' quotas together exceed the cluster.
+- A UI (phase 2).
+- Leader election: run exactly one replica.
+
+Before trusting a change to the controller or its templates against the
+live tenants, run `--observe` (above) and read the drift.
+
+It runs as **cluster-admin**, because installing a vCluster with Helm
+creates cluster-scoped objects. [`deploy/controller.yaml`](deploy/controller.yaml)
+explains how it is contained.

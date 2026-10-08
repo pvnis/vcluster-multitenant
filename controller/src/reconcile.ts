@@ -16,12 +16,18 @@ import {
 
 const log = (tenant: string, msg: string) => console.log(JSON.stringify({ ts: new Date().toISOString(), tenant, msg }));
 
-export async function reconcileTenant(kube: Kube, templates: Templates, raw: Tenant): Promise<void> {
+// readOnly: treat every Tenant as Observe and write nothing at all -- not
+// even status; the drift is printed instead (`node src/main.ts --observe`).
+export async function reconcileTenant(kube: Kube, templates: Templates, raw: Tenant, readOnly = false): Promise<void> {
   const t = withDefaults(raw);
+  if (readOnly) t.spec.management = 'Observe';
   const name = t.metadata!.name!;
   const mode = t.spec.management;
 
-  if (t.metadata?.deletionTimestamp) return handleDeletion(kube, templates, t);
+  if (t.metadata?.deletionTimestamp) {
+    if (readOnly) return log(name, 'being deleted; skipped (read-only)');
+    return handleDeletion(kube, templates, t);
+  }
   if (mode === 'Manage' && !(t.metadata?.finalizers ?? []).includes(FINALIZER)) {
     await kube.patchTenant(name, { metadata: { finalizers: [...(t.metadata?.finalizers ?? []), FINALIZER] } });
   }
@@ -71,6 +77,12 @@ export async function reconcileTenant(kube: Kube, templates: Templates, raw: Ten
   status.driftCount = status.drift!.length;
   status.observedGeneration = t.metadata?.generation;
   status.phase = mode === 'Observe' ? (failed ? 'Degraded' : 'Observing') : failed ? 'Degraded' : 'Ready';
+  if (readOnly) {
+    log(name, `read-only: drift=${status.driftCount}`);
+    for (const d of status.drift!) console.log(`  ${d.change}\t${d.object}\t${d.paths.join(' ')}`);
+    for (const c of conditions) if (c.status !== 'True') console.log(`  ! ${c.type} ${c.reason}: ${c.message}`);
+    return;
+  }
   await kube.patchTenantStatus(name, status);
   log(name, `${mode}: phase=${status.phase} drift=${status.driftCount}`);
 }
