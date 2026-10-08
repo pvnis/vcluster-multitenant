@@ -77,6 +77,13 @@ spec:
     # so it is selected here too. It stays authoritative for cluster-internal
     # names and can no longer forward external ones. That is intended, and it is
     # why external DNS inside a tenant fails rather than hangs.
+    # Node IPs are classified by identity (host, remote-node, kube-apiserver),
+    # which no CIDR selector -- including the 0.0.0.0/0 below -- ever matches.
+    # Without this line, a tenant that allows itself all egress reached the
+    # node API, the kubelets, and the registry's NodePort, where it started a
+    # push (202) past midori/platform-guard.yaml. Tenant workloads need none of
+    # these: their API server and DNS are pods.
+    - toEntities: [host, remote-node, kube-apiserver]
     - toCIDRSet:
         - cidr: 0.0.0.0/0
           except:
@@ -121,6 +128,13 @@ spec:
         - matchExpressions:
             - {key: io.cilium.k8s.namespace.labels.tenant, operator: Exists}
             - {key: io.cilium.k8s.namespace.labels.tenant, operator: NotIn, values: [TENANT]}
+    # Node IPs are classified by identity (host, remote-node, kube-apiserver),
+    # which no CIDR selector -- including the 0.0.0.0/0 below -- ever matches.
+    # Without this line, a tenant that allows itself all egress reached the
+    # node API, the kubelets, and the registry's NodePort, where it started a
+    # push (202) past midori/platform-guard.yaml. Tenant workloads need none of
+    # these: their API server and DNS are pods.
+    - toEntities: [host, remote-node, kube-apiserver]
     - toCIDRSet:
         - cidr: 0.0.0.0/0
           except:
