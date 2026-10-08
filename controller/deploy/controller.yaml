@@ -1,0 +1,70 @@
+# The tenant controller, in tenant-system, on midori-eye-0.
+#
+#   kubectl apply -f crd.yaml
+#   ./templates.sh | kubectl apply -f -
+#   sed s/IMAGE_TAG/$(./build-image.sh)/ controller.yaml | kubectl apply -f -
+#
+# PRIVILEGE: it binds cluster-admin. It installs each tenant's vCluster with
+# Helm, and that chart creates ClusterRoles, bindings, StatefulSets and more;
+# it also writes cluster-wide Cilium policies. A narrower role would have to
+# track the vcluster chart's contents release by release. So treat this pod
+# as the most privileged thing on the platform:
+#   - tenant-system carries no `tenant` label, so platform-guard.yaml denies
+#     every tenant connection into it, and it listens on nothing anyway;
+#   - it runs as the image's non-root `node` user, read-only root filesystem,
+#     no privilege escalation, all capabilities dropped;
+#   - it holds no credentials of its own beyond its ServiceAccount; Grafana's
+#     admin password is read from observability/grafana-admin when needed.
+# One replica, Recreate: there is no leader election, two would race.
+apiVersion: v1
+kind: Namespace
+metadata: { name: tenant-system }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: tenant-controller, namespace: tenant-system }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: tenant-controller }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: cluster-admin }
+subjects: [{ kind: ServiceAccount, name: tenant-controller, namespace: tenant-system }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: tenant-controller, namespace: tenant-system }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: tenant-controller } }
+  template:
+    metadata:
+      labels: { app: tenant-controller }
+    spec:
+      serviceAccountName: tenant-controller
+      nodeSelector: { midori.role: observability }
+      tolerations: [{ key: midori.role, operator: Equal, value: observability, effect: NoSchedule }]
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, seccompProfile: { type: RuntimeDefault } }
+      containers:
+      - name: controller
+        image: registry.midori/tenant-controller:IMAGE_TAG
+        env:
+        - { name: TEMPLATE_DIR, value: /templates }
+        - { name: RESYNC_SECONDS, value: "300" }
+        - { name: API_HOST, value: "10.30.30.226" }
+        - { name: HELM_CACHE_HOME, value: /tmp/helm/cache }
+        - { name: HELM_CONFIG_HOME, value: /tmp/helm/config }
+        - { name: HELM_DATA_HOME, value: /tmp/helm/data }
+        resources:
+          requests: { cpu: 50m, memory: 128Mi }
+          limits: { memory: 512Mi }
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities: { drop: [ALL] }
+        volumeMounts:
+        - { name: templates, mountPath: /templates, readOnly: true }
+        - { name: tmp, mountPath: /tmp }
+      volumes:
+      - { name: templates, configMap: { name: tenant-templates } }
+      - { name: tmp, emptyDir: {} }

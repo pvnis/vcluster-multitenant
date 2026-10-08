@@ -26,6 +26,8 @@ built** wins.
     platform      platform-guard.yaml: tenants cannot connect into non-tenant
                   namespaces (found while building observability/)
     gaps          what the site is missing: OPENSTACK-GAPS.md
+    tenants       managed by the tenant controller (../../controller/):
+                  `kubectl get tenants`; one Tenant object per tenant
 
 ### Step 0, verified
 

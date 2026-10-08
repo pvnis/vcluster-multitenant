@@ -1,0 +1,24 @@
+{
+  "name": "midori-tenant-controller",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Reconciles midori.phoenix/v1alpha1 Tenant objects into everything a midori tenant needs.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test 'test/**/*.test.ts'",
+    "start": "node src/main.ts",
+    "pretest": "deploy/templates.sh | node test/export-templates.ts"
+  },
+  "dependencies": {
+    "@kubernetes/client-node": "2.0.0",
+    "yaml": "2.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.1",
+    "typescript": "7.0.2"
+  }
+}

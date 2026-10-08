@@ -37,6 +37,14 @@ Tenant users are Editors and never org Admins: an org Admin can edit
 datasources, and so could aim its Prometheus at the real one or change its
 Loki tenant header.
 
+**Tenants are now managed by the tenant controller (`../../../controller/`)**:
+it creates each tenant's proxy, Grafana org, user, datasources and dashboards,
+and keeps the admin org's Loki tenant list in Secret
+`grafana-datasource-loki-admin` (Grafana's datasource sidecar), so the
+per-tenant steps below (8, 9) are what it does, not what an operator runs.
+`grafana-tenants.py` remains as the record; do not run it against
+Tenant-managed tenants.
+
 ## Bring-up, in order
 
 From `manifests/midori/observability/`, host kubeconfig:

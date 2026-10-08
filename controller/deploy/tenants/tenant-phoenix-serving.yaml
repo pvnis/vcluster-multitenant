@@ -1,0 +1,10 @@
+apiVersion: midori.phoenix/v1alpha1
+kind: Tenant
+metadata: { name: tenant-phoenix-serving }
+spec:
+  management: Observe
+  quota: { gpus: 4, gpuMemoryMiB: 184272 }
+  network: { internet: true }
+  controlPlane: { apiNodePort: 32243, size: large }
+  gateway: { expose: true }
+  observability: { dashboards: [overview, serving] }

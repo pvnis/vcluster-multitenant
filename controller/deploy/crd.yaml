@@ -1,0 +1,96 @@
+# Tenant: one object per midori tenant. The tenant controller (../src)
+# reconciles it into everything the runbook used to do by hand: namespace,
+# quota, network policies, the vCluster, the S3 gateway key, the Prometheus
+# label proxy, the Grafana org/user/datasources/dashboards, a kubeconfig.
+#
+# spec.management decides whether the controller may change anything:
+#   Observe  compute what applying the desired state WOULD change (a
+#            server-side dry run) and report it in status.drift; change
+#            nothing. Existing tenants are adopted in this mode.
+#   Manage   apply.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: tenants.midori.phoenix
+spec:
+  group: midori.phoenix
+  scope: Cluster
+  names: { plural: tenants, singular: tenant, kind: Tenant, shortNames: [tn] }
+  versions:
+  - name: v1alpha1
+    served: true
+    storage: true
+    subresources: { status: {} }
+    additionalPrinterColumns:
+    - { name: Mode, type: string, jsonPath: .spec.management }
+    - { name: Phase, type: string, jsonPath: .status.phase }
+    - { name: GPUs, type: integer, jsonPath: .spec.quota.gpus }
+    - { name: Internet, type: boolean, jsonPath: .spec.network.internet }
+    - { name: API, type: string, jsonPath: .status.apiEndpoint }
+    - { name: Drift, type: integer, jsonPath: .status.driftCount }
+    - { name: Age, type: date, jsonPath: .metadata.creationTimestamp }
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          metadata:
+            type: object
+            properties:
+              # The tenant- prefix is what the observability rules and
+              # dashboards key on; enforce it here rather than let a tenant
+              # silently fall out of them. At most 32 characters: vCluster
+              # derives Service names such as <name>-node-midori-nv-1 from it,
+              # and those must fit in 63.
+              name: { type: string, maxLength: 32, pattern: '^tenant-[a-z0-9]([-a-z0-9]{0,23}[a-z0-9])?$' }
+          spec:
+            type: object
+            required: [quota]
+            properties:
+              management: { type: string, enum: [Observe, Manage], default: Observe }
+              quota:
+                type: object
+                required: [gpus, gpuMemoryMiB]
+                properties:
+                  gpus: { type: integer, minimum: 0, maximum: 4 }
+                  gpuMemoryMiB: { type: integer, minimum: 0, maximum: 184272 }
+              network:
+                type: object
+                default: {}
+                properties:
+                  # Public-internet egress (tenant-internet.yaml) instead of
+                  # the standard floor. Private ranges, node identities and
+                  # the metadata service stay denied either way.
+                  internet: { type: boolean, default: false }
+              controlPlane:
+                type: object
+                default: {}
+                properties:
+                  # Fixed NodePort for the tenant API. Allocated from
+                  # 31000-32767 and recorded in status when absent.
+                  apiNodePort: { type: integer, minimum: 30000, maximum: 32767 }
+                  # The vCluster control plane. Small by default; tenants that
+                  # install large CRD sets (Phoenix Serving) need "large".
+                  size: { type: string, enum: [small, large], default: small }
+              s3:
+                type: object
+                default: {}
+                properties:
+                  enabled: { type: boolean, default: true }
+              gateway:
+                type: object
+                default: {}
+                properties:
+                  # Open a Phoenix Serving Gateway in the tenant to clients
+                  # outside the cluster (gateway-ingress.yaml).
+                  expose: { type: boolean, default: false }
+              observability:
+                type: object
+                default: {}
+                properties:
+                  dashboards:
+                    type: array
+                    default: [overview]
+                    items: { type: string, enum: [overview, serving] }
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
