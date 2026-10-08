@@ -28,7 +28,7 @@
   </main>
 
   <main id="app-view" hidden>
-    <section class="capacity" id="capacity" aria-label="Cluster capacity"></section>
+    <section id="capacity" aria-label="Quota commitment"></section>
 
     <section class="card">
       <div class="section-head">
@@ -42,7 +42,7 @@
         <table class="tenants">
           <thead>
             <tr>
-              <th>Tenant</th><th>Status</th><th>GPU attach.</th><th>CPU (requests)</th><th>Memory (requests)</th><th>Network</th><th>API</th><th></th>
+              <th>Tenant</th><th>Status</th><th>GPU quota</th><th>GPU memory</th><th>CPU quota</th><th>Memory quota</th><th>Network</th><th>API</th>
             </tr>
           </thead>
           <tbody id="tenant-rows"></tbody>

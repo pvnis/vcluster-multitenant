@@ -133,49 +133,132 @@ async function refresh() {
   }
 }
 
+// Each tenant keeps one colour: slots of the validated categorical palette
+// (--series-1..8) in CREATION order, so a new tenant takes the next colour and
+// existing ones never repaint. Past eight, tenants share the neutral slot.
+function tenantColour(name) {
+  const order = [...data.tenants].sort((a, b) => String(a.created).localeCompare(String(b.created)) || a.name.localeCompare(b.name));
+  const i = order.findIndex((t) => t.name === name);
+  return i >= 0 && i < 8 ? `var(--series-${i + 1})` : 'var(--series-other)';
+}
+const swatch = (name) => h('span', { class: 'swatch', style: `background:${tenantColour(name)}` });
+
+// What the page leads with: how much of each resource has been PROMISED to
+// tenants (their quotas) against what the GPU nodes have, divided by tenant.
+// What pods request right now is shown beneath, secondary.
+const RESOURCES = [
+  { key: 'requests.nvidia.com/gpu', cap: 'gpus', label: 'GPU attachments', kind: 'count', unit: 'cards',
+    capacityOf: (c) => c.cards,
+    note: (c) => `Against the ${c.cards} cards: the worst case, every attachment a whole card. Sharing fits up to ${c.cards ? Math.round(c.gpus.capacity / c.cards) : 10} pods on a card.` },
+  { key: 'requests.nvidia.com/gpumem', cap: 'gpuMemoryMiB', label: 'GPU memory', kind: 'mib', unit: '',
+    note: () => 'Pods that take whole cards request no GPU memory, so "requested" can read low on a full cluster.' },
+  { key: 'requests.nvidia.com/gpucores', cap: 'gpuCores', label: 'GPU time', kind: 'count', unit: '(100 = one card)', optional: true,
+    note: () => 'A weight, not a cap: idle time goes to whoever is busy.' },
+  { key: 'requests.cpu', cap: 'cpu', label: 'CPU', kind: 'cpu', unit: 'cores' },
+  { key: 'requests.memory', cap: 'memory', label: 'Memory (DRAM)', kind: 'memory', unit: '' },
+];
+
+const amount = (_kind, raw) => qty(raw);
+
 function renderCapacity() {
   const c = data.capacity;
-  // "Requested" is quota accounting (what pods asked for), not measured
-  // use -- measured use is Grafana's job.
-  const cards = [
-    ['GPU attachments', c.gpus, 'count', 'slots', `On ${c.cards} cards; up to ${c.cards ? Math.round(c.gpus.capacity / c.cards) : 0} pods share each. Whole-GPU pods fill a card's slots for sharing.`],
-    ['GPU memory', c.gpuMemoryMiB, 'mib', '', 'Pods that take whole cards request no GPU memory and are not counted here.'],
-    ['GPU time', c.gpuCores, 'count', '', '100 = one card\u2019s time. Only pods that request nvidia.com/gpucores count.'],
-    ['CPU requests', c.cpu, 'cpu', 'cores', null],
-    ['Memory requests (DRAM)', c.memory, 'memory', '', null],
-  ].filter(([, line]) => line);
-  $('#capacity').replaceChildren(...cards.map(([title, l, kind, unit, note]) => {
-    const over = l.overcommit !== null && l.overcommit > 1;
-    return h('div', { class: 'card cap' },
-      h('h3', { text: title }),
-      h('div', { class: 'big' }, `${fmt(kind, l.used)} `, h('span', { class: 'muted', text: `/ ${fmt(kind, l.capacity)} ${unit}`.trim() })),
-      h('div', { class: 'sub' }, 'requested · quotas total ', h('strong', { text: fmt(kind, l.quota) }),
-        l.overcommit !== null ? ` (${Math.round(l.overcommit * 100)}% of capacity)` : '',
-        over ? h('span', { class: 'chip warn', style: 'margin-left:.4rem', text: 'overcommitted' }) : null),
-      bar(l.used, l.quota, l.capacity),
-      note ? h('p', { class: 'muted note-small', text: note }) : null);
-  }));
+  const rows = RESOURCES.map((r) => {
+    const capacity = r.capacityOf ? r.capacityOf(c) : c[r.cap]?.capacity ?? 0;
+    const shares = data.tenants.map((t) => ({ t, line: t.quota[r.key] })).filter((x) => x.line);
+    const unlimited = r.optional ? data.tenants.filter((t) => !t.quota[r.key]).map((t) => t.name) : [];
+    const committed = shares.reduce((a, x) => a + amount(r.kind, x.line.hard), 0);
+    const requested = shares.reduce((a, x) => a + amount(r.kind, x.line.used), 0);
+    const ratio = capacity > 0 ? committed / capacity : null;
+    const over = ratio !== null && ratio > 1;
+    const scale = Math.max(capacity, committed) || 1;
+    const unitText = r.unit ? ` ${r.unit}` : '';
+
+    const stack = h('div', { class: 'stack', role: 'img', 'aria-label': `${r.label}: ${fmt(r.kind, committed)} committed of ${fmt(r.kind, capacity)}` },
+      shares.filter((x) => amount(r.kind, x.line.hard) > 0).map((x) => {
+        const v = amount(r.kind, x.line.hard), used = amount(r.kind, x.line.used);
+        const seg = h('span', { class: 'seg', tabindex: 0, style: `width:${(v / scale) * 100}%;background:${tenantColour(x.t.name)}` });
+        const tip = [`${x.t.name}`, `quota ${fmt(r.kind, v)}${unitText}`, `requested now ${fmt(r.kind, used)}`, capacity ? `${Math.round((v / capacity) * 100)}% of capacity` : ''];
+        seg.addEventListener('mouseenter', (e) => showTip(e, tip));
+        seg.addEventListener('mousemove', moveTip);
+        seg.addEventListener('mouseleave', hideTip);
+        seg.addEventListener('focus', (e) => showTip(e, tip));
+        seg.addEventListener('blur', hideTip);
+        return seg;
+      }),
+      capacity > 0 ? h('span', { class: 'cap-mark', style: `left:${(capacity / scale) * 100}%`, title: 'capacity' }) : null);
+
+    if (r.optional && shares.length === 0) {
+      return h('div', { class: 'commit-row' },
+        h('div', { class: 'commit-head' }, h('h3', { text: r.label }),
+          h('div', { class: 'commit-figure muted', text: 'no tenant has a limit' })),
+        h('div', { class: 'requested muted' }, `Unlimited for every tenant (${unlimited.join(', ')}). Set quota.gpuCores to bound it.`,
+          r.note ? h('span', { text: ` — ${r.note(c)}` }) : null));
+    }
+    // The capacity label must stay inside the card: right-aligned near the end.
+    const capPos = capacity > 0 ? (capacity / scale) * 100 : 0;
+    const capLabelStyle = `left:${capPos}%;transform:translateX(${capPos > 90 ? '-100%' : capPos < 10 ? '0' : '-50%'})`;
+    return h('div', { class: 'commit-row' },
+      h('div', { class: 'commit-head' },
+        h('h3', { text: r.label }),
+        h('div', { class: 'commit-figure' },
+          h('strong', { text: fmt(r.kind, committed) }),
+          h('span', { class: 'muted', text: ` committed of ${fmt(r.kind, capacity)}${unitText}` }),
+          ratio !== null ? h('span', { class: 'pct', text: ` · ${Math.round(ratio * 100)}%` }) : null,
+          over ? h('span', { class: 'chip warn', text: '▲ overcommitted' }) : null)),
+      stack,
+      h('div', { class: 'stack-scale muted' }, capPos > 10 ? h('span', { text: '0' }) : null, capacity > 0 ? h('span', { class: 'cap-label', style: capLabelStyle, text: 'capacity' }) : null),
+      h('div', { class: 'breakdown' },
+        shares.map((x) => h('span', { class: 'who' }, swatch(x.t.name), `${x.t.name} `, h('strong', { text: fmt(r.kind, amount(r.kind, x.line.hard)) }))),
+        unlimited.length ? h('span', { class: 'who muted', text: `no limit: ${unlimited.join(', ')}` }) : null),
+      h('div', { class: 'requested muted' },
+        `Requested now: ${fmt(r.kind, requested)}${unitText}`,
+        capacity > 0 ? ` (${Math.round((requested / capacity) * 100)}% of capacity)` : '',
+        r.note ? h('span', { text: ` — ${r.note(c)}` }) : null));
+  });
+  $('#capacity').replaceChildren(
+    h('div', { class: 'card commit' },
+      h('div', { class: 'section-head' },
+        h('div', {}, h('h2', { text: 'Quota commitment' }),
+          h('p', { class: 'muted', text: 'What the tenants have been promised (their quotas), against what the GPU nodes have. Requests by running pods are shown beneath each bar.' }))),
+      rows));
 }
 
-function miniQuota(line, kind) {
+// One tooltip element for every segment.
+const tipEl = h('div', { class: 'tip', role: 'tooltip', hidden: true });
+document.body.append(tipEl);
+function showTip(e, lines) {
+  tipEl.replaceChildren(...lines.filter(Boolean).map((l, i) => h('div', { class: i === 0 ? 'tip-title' : '', text: l })));
+  tipEl.hidden = false;
+  moveTip(e);
+}
+function moveTip(e) {
+  const r = e.target.getBoundingClientRect();
+  const x = e.clientX ?? r.left + r.width / 2, y = e.clientY ?? r.top;
+  tipEl.style.left = `${Math.min(x + 12, window.innerWidth - tipEl.offsetWidth - 8)}px`;
+  tipEl.style.top = `${y + 14}px`;
+}
+function hideTip() { tipEl.hidden = true; }
+
+function miniQuota(line, kind, unit = '') {
   if (!line) return h('span', { class: 'muted', text: '—' });
-  const used = kind === 'count' ? Number(line.used) : qty(line.used);
-  const hard = kind === 'count' ? Number(line.hard) : qty(line.hard);
+  const used = qty(line.used), hard = qty(line.hard);
+  const u = hard === 1 ? unit.replace(/s$/, '') : unit;  // "1 GPU", "2 GPUs"
   return h('div', { class: 'mini' },
-    h('div', { class: 'nums' }, fmt(kind, used), h('span', { class: 'muted', text: ` / ${fmt(kind, hard)}` })),
+    h('div', { class: 'nums' }, h('strong', { text: `${fmt(kind, hard)}${u}` })),
+    h('div', { class: 'muted used', text: `requested ${fmt(kind, used)}${hard > 0 ? ` · ${Math.round((used / hard) * 100)}%` : ''}` }),
     bar(used, undefined, hard));
 }
 
 function renderTenants() {
-  const rows = data.tenants.map((t) => h('tr', { onclick: () => openDetail(t.name), tabindex: 0, onkeydown: (e) => { if (e.key === 'Enter') openDetail(t.name); } },
-    h('td', {}, h('div', { class: 'name', text: t.name }), h('small', { class: 'muted', text: t.spec.controlPlane.size === 'large' ? 'large control plane' : '' })),
+  const rows = data.tenants.map((t) => h('tr', { onclick: () => openDetail(t.name), tabindex: 0, title: `Open ${t.name}`, 'aria-label': `Open ${t.name}`, onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(t.name); } } },
+    h('td', {}, h('div', { class: 'name' }, swatch(t.name), t.name), h('small', { class: 'muted', text: t.spec.controlPlane.size === 'large' ? 'large control plane' : '' })),
     h('td', {}, h('div', { class: 'chips' }, statusChips(t))),
-    h('td', {}, miniQuota(t.quota['requests.nvidia.com/gpu'], 'count')),
-    h('td', {}, miniQuota(t.quota['requests.cpu'], 'cpu')),
+    h('td', {}, miniQuota(t.quota['requests.nvidia.com/gpu'], 'count', ' GPUs')),
+    h('td', {}, miniQuota(t.quota['requests.nvidia.com/gpumem'], 'mib')),
+    h('td', {}, miniQuota(t.quota['requests.cpu'], 'cpu', ' cores')),
     h('td', {}, miniQuota(t.quota['requests.memory'], 'memory')),
     h('td', {}, h('span', { class: `chip ${t.spec.network.internet ? 'info' : ''}`, text: t.spec.network.internet ? 'internet' : 'isolated' })),
     h('td', {}, h('span', { class: 'mono', text: t.status.apiEndpoint || '—' })),
-    h('td', {}, h('button', { class: 'link', type: 'button', text: 'Open ›', onclick: (e) => { e.stopPropagation(); openDetail(t.name); } })),
   ));
   $('#tenant-rows').replaceChildren(...rows);
   $('#no-tenants').hidden = data.tenants.length > 0;

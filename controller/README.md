@@ -55,13 +55,19 @@ keep it in step (`kubectl diff -f deploy/tenants/<tenant>.yaml` shows any gap).
 **http://&lt;any node&gt;:30310** (e.g. http://10.30.30.226:30310). Sign in as
 `admin`; the password is in `~/midori-build/tenant-ui-admin` on cp-0.
 
-- **Capacity**: GPUs, GPU memory, CPU and memory (DRAM) of the GPU nodes,
-  what pods have requested, and what the tenants' quotas add up to, flagged
-  *overcommitted* when the quotas exceed the hardware. "Requested" is quota
-  accounting, not measured use (that is Grafana's job); pods that take whole
-  GPUs request no GPU memory.
-- **Tenants**: status, mode, drift, GPU / CPU / memory use against quota,
-  network, API endpoint. Refreshes every 5 seconds.
+- **Quota commitment** (the top of the page): for GPU attachments, GPU
+  memory, GPU time, CPU and memory (DRAM), how much has been **promised** to
+  tenants -- their quotas, as one bar stacked by tenant, each in its own
+  colour -- against what the GPU nodes have, with a capacity marker and the
+  percentage, flagged *overcommitted* past 100%. Below each bar: the
+  per-tenant amounts, and what running pods request now. GPU attachments are
+  measured against the cards (the worst case: every attachment a whole card);
+  a resource no tenant limits says so instead of showing 0. Quotas reserve
+  nothing, so overcommitment is a decision, not an error -- this is where it
+  is made visible.
+- **Tenants**: each tenant's quotas first (GPUs, GPU memory, CPU, memory),
+  with what its pods request beneath; status, mode, drift, network, API
+  endpoint. Refreshes every 5 seconds; click a row (or Enter) to open it.
 - **A tenant**: its spec, every quota line, the controller's conditions and
   any drift; **Show credentials** (Grafana login, S3 key) and **Download
   kubeconfig** for the hand-over; **Edit**; **Switch to Observe / Manage**;
