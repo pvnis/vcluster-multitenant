@@ -151,3 +151,29 @@ gateway rolled twice (key added, then removed) and a Grafana org came and
 went. The probes now use values invalid under any limits plus a name the
 server always rejects, and the delete probe picks an existing tenant with a
 wrong confirmation; a run checks that the set of tenants is unchanged.
+
+## Whole cards charged in full (2026-10-08)
+
+A pod with `nvidia.com/gpu` and no `nvidia.com/gpumem` held whole cards while
+the GPU-memory quota charged it 0. The gVisor webhook (gpuslicing
+`4409f996b`, `--nvidia-whole-card-mib=46068`) now gives such a container a
+card's `nvidia.com/gpumem` per GPU, limit and request, on the host pod only;
+`nvidia.com/gpumem-percentage` pods are left alone. Tested on a scratch
+tenant `tenant-wcard` (deleted afterwards):
+
+- 2 attachments, 10000 MiB: whole-GPU pod refused (`exceeded quota ...
+  requested: requests.nvidia.com/gpumem=46068`), shown in the tenant as a
+  SyncError on a Pending pod; an 8000 MiB slice and a 10% pod admitted with
+  their own values, quota used 8000.
+- 46068 MiB: the whole-GPU pod admitted, host pod limit and request 46068,
+  runsc limit 48305799168 bytes, quota used 46068; the tenant's copy of the
+  pod unchanged. Host pods' resourceVersions held still for a minute: the
+  syncer does not fight the change.
+
+Not tested: a whole-card pod actually *running* under the new limit, as all
+four cards were held by tenant-phoenix-serving. The limit equals the card
+(nvidia-smi reports 46068 MiB total), so it should constrain nothing. The
+first real test is that tenant's next vLLM restart. Its quota, 184272, is
+exactly four cards.
+
+tenant-nv-a's GPU memory quota went to 10000 the same day: slices only.

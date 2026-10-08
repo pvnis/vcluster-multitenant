@@ -222,7 +222,7 @@ function renderCapacity() {
         : h('div', { class: 'requested muted' },
             `Requested now: ${fmt(r.kind, requested)}${unitText}`,
             capacity > 0 ? ` (${pctOf(requested, capacity)})` : '',
-            r.held ? ' — whole-GPU pods declare no GPU memory and are not counted here (held/used figures unavailable: Prometheus unreachable)' : '',
+            r.held ? ' — held/used figures unavailable: Prometheus unreachable' : '',
             r.note ? h('span', { text: ` — ${r.note(c)}` }) : null));
   });
   $('#capacity').replaceChildren(
@@ -251,8 +251,8 @@ function hideTip() { tipEl.hidden = true; }
 
 function miniQuota(line, kind, unit = '', held) {
   if (!line) return h('span', { class: 'muted', text: '—' });
-  // GPU memory: what the tenant HOLDS (whole cards included), not what its
-  // pods declare -- whole-GPU pods declare none.
+  // GPU memory: what the tenant HOLDS, whole cards at a full card, including
+  // pods admitted before the webhook made whole cards declare their memory.
   const used = held !== undefined ? held : qty(line.used), hard = qty(line.hard);
   const verb = held !== undefined ? 'holds' : 'requested';
   const u = hard === 1 ? unit.replace(/s$/, '') : unit;  // "1 GPU", "2 GPUs"
@@ -391,7 +391,7 @@ let memTouched = false;  // has the user typed a GPU memory value themselves
 function gpuHint() {
   const f = $('#editor-form');
   const mib = Number(f.gpuMemoryMiB.value || 0);
-  $('#gpumem-hint').textContent = `GPU memory = ${(mib / A6000_MIB).toFixed(2).replace(/\.00$/, '')} × RTX A6000 (${A6000_MIB} MiB each). Pods without a GPU memory limit take whole cards.`;
+  $('#gpumem-hint').textContent = `GPU memory = ${(mib / A6000_MIB).toFixed(2).replace(/\.00$/, '')} × RTX A6000 (${A6000_MIB} MiB each). A pod with no GPU memory limit takes whole cards and is charged ${A6000_MIB} MiB for each.`;
 }
 
 function openEditor(t) {

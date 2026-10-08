@@ -13,7 +13,7 @@ built** wins.
     k3s           v1.36.5+k3s1, 3 servers (embedded etcd) + 2 agents
     Cilium        1.19.8, KPR, Socket LB Coverage: Hostns-only (checked)
     driver        610.43.02 open, gpuslicing 423ceb90, built on each GPU node
-    runsc         gvisor gpuslicing e6a06cbce (runsc, shim, webhook), systrap
+    runsc         gvisor gpuslicing e6a06cbce (runsc, shim), systrap; webhook 4409f996b
     HAMi          2.9.0, 20 nvidia.com/gpu per node
     vCluster      0.36.1: tenant-nv-a (:31943, 4 GPUs), tenant-nv-b (:32043, 2 GPUs),
                   tenant-phoenix-serving (:32243, 4 GPUs, public internet;
@@ -332,6 +332,11 @@ and writes the CA into the `MutatingWebhookConfiguration` it adopts, so it needs
 no certificate Secret. Keep `failurePolicy: Fail` — it is a security property,
 not an availability preference: a pod admitted without being mutated carries no
 limit annotation and runs at the node ceiling.
+
+`--nvidia-whole-card-mib=46068` (gpuslicing `4409f996b`): a container asking for
+`nvidia.com/gpu` with no `nvidia.com/gpumem` or `nvidia.com/gpumem-percentage`
+is given a card's memory per GPU, so the tenants' GPU-memory quotas charge
+whole cards. One card size only; see `../../controller/MIXED-GPUS.md`.
 
 ## Step 7 — storage, and model weights without RWX
 

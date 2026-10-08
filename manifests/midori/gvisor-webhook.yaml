@@ -45,7 +45,7 @@ spec:
       serviceAccountName: gvisor-webhook
       containers:
       - name: webhook
-        image: registry.midori/gvisor-webhook:e6a06cbce   # pvnis/gvisor gpuslicing e6a06cbce, pushed with crane
+        image: registry.midori/gvisor-webhook:4409f996b   # pvnis/gvisor gpuslicing 4409f996b, pushed with crane
         imagePullPolicy: IfNotPresent
-        args: ["--port=8443", "--pod-namespace-labels=gvisor"]
+        args: ["--port=8443", "--pod-namespace-labels=gvisor", "--nvidia-whole-card-mib=46068"]
         ports: [{ containerPort: 8443 }]

@@ -1,6 +1,8 @@
 // GPU memory as held and as used, from Prometheus -- what ResourceQuota cannot
-// say. A pod that takes whole GPUs declares no nvidia.com/gpumem, so the
-// quota counts it as 0 while it holds every byte of its cards.
+// say. Since 2026-10-08 the gVisor webhook gives a whole-GPU pod a card's
+// nvidia.com/gpumem, so the quota charges it; pods admitted before that (or
+// with the webhook's --nvidia-whole-card-mib off) declare none and are
+// counted at a full card here.
 //
 // HELD, per tenant namespace: each running pod's nvidia.com/gpumem x its GPUs
 // for a slice, or a card's full memory per GPU for a whole-card pod;

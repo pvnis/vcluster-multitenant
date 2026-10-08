@@ -217,13 +217,24 @@ Up to 10 pods share a card. A pod that names no `gpumem` takes the
 **whole** card, and HAMi will not put a fractional pod on a card a whole-GPU
 pod holds -- so whole-GPU pods anywhere block sharing on their cards.
 
+Whole cards are charged in full. The gVisor webhook
+(`--nvidia-whole-card-mib=46068`) gives a pod that asks for GPUs but neither
+`nvidia.com/gpumem` nor `nvidia.com/gpumem-percentage` a card's memory per
+GPU, as limit and request. That happens on the host side only; the tenant's
+own copy of the pod is unchanged. So a tenant runs N whole cards only with
+`gpuMemoryMiB` of at least N x 46068. A smaller quota (tenant-nv-a's 10000)
+means slices only, and a whole-GPU pod stays Pending in the tenant with
+`SyncError ... exceeded quota: tenant-quota, requested:
+requests.nvidia.com/gpumem=46068`. The value assumes every card is an A6000.
+For mixed cards see [MIXED-GPUS.md](MIXED-GPUS.md).
+
 The tenant's quota follows the same split:
 
 - `quota.gpus` counts **attachments**, not cards: three pods sharing one
   card use 3. Up to 40 (4 cards x 10 shares). Set it generously for a tenant
   running many small GPU pods.
-- `quota.gpuMemoryMiB` bounds the GPU memory its pods request: the
-  fractional axis. (A multi-GPU pod's `gpumem` is charged once, though it gets
+- `quota.gpuMemoryMiB` bounds the GPU memory its pods request, whole cards
+  included (46068 each, above). (A multi-GPU pod's `gpumem` is charged once, though it gets
   that much on each card; gVisor still enforces it per card.)
 - `quota.gpuCores` (optional) bounds the GPU time its pods request; 100 = one
   card's time.

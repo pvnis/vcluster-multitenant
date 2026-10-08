@@ -20,6 +20,10 @@ whose four cards were all held.
   container asking for `nvidia.com/gpu` without `nvidia.com/gpumem` or
   `nvidia.com/gpumem-percentage` is given `nvidia.com/gpumem` = one card
   (46068 MiB, a webhook flag), so the quota charges it like any other pod.
+  Deployed 2026-10-08 (webhook `4409f996b`, gpuslicing) and tested on a
+  scratch tenant (whole-GPU pod refused under a 10000 MiB quota, admitted
+  and charged 46068 under a one-card quota; slices and percentage pods
+  unchanged; vCluster's syncer leaves the host-side change alone).
   This is correct **only while every card has the same memory**: at admission
   the webhook cannot know which card the pod will land on.
 
