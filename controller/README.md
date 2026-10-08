@@ -331,7 +331,10 @@ applies to Managed tenants.)
 - Put S3 credentials inside a tenant's vCluster.
 - Leader election: run exactly one replica (the UI too: its sessions are in
   memory).
-- SSO for the UI; it has its own users.
+- **Google sign-in for the UI** (Midokura Workspace domain, per-user or
+  per-group roles) is decided but deferred until a hostname, a certificate
+  and a Google OAuth client exist: [GOOGLE-AUTH.md](GOOGLE-AUTH.md). Until
+  then the UI has its own users.
 
 Before trusting a change to the controller or its templates against the
 live tenants, run `--observe` (above) and read the drift.
