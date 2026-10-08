@@ -141,3 +141,13 @@ controller kept the port from status and the release). Fields the form does
 not show are now carried over (unit-tested, and checked live). The audit
 trail of that edit came from Loki: the UI pod's own log was gone after a
 redeploy, but Alloy had shipped it.
+
+**And a test that created a tenant.** `test/ui-api.sh` probed validation
+with `gpus: 9`, expecting a 400. Once the limit went to 40 that was valid,
+and the run at 16:30 UTC created a real Manage tenant, `tenant-x`. It was
+deleted about a minute later, completely (namespace, policies, proxy,
+credentials, S3 key, Grafana org; no volume), but in that minute the S3
+gateway rolled twice (key added, then removed) and a Grafana org came and
+went. The probes now use values invalid under any limits plus a name the
+server always rejects, and the delete probe picks an existing tenant with a
+wrong confirmation; a run checks that the set of tenants is unchanged.

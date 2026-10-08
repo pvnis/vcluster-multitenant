@@ -12,9 +12,17 @@ echo "me:                              $(c -b $J $B/api/me) $(cat /tmp/ui-body)"
 echo "overview:                        $(c -b $J $B/api/overview) tenants=$(jq -r '[.tenants[].name]|join(",")' /tmp/ui-body) gpus=$(jq -c '.capacity.gpus' /tmp/ui-body)"
 echo "write without X-Tenant-UI:       $(c -b $J -X PUT -H 'content-type: application/json' -d '{}' $B/api/tenants/tenant-nv-b)  (want 403)"
 echo "write with foreign Origin:       $(c -b $J -X PUT -H 'X-Tenant-UI: 1' -H 'Origin: http://evil.example' -H 'content-type: application/json' -d '{}' $B/api/tenants/tenant-nv-b)  (want 403)"
-echo "invalid spec:                    $(c -b $J -X POST -H 'X-Tenant-UI: 1' -H 'content-type: application/json' -d '{"name":"tenant-x","spec":{"quota":{"gpus":9,"gpuMemoryMiB":1}}}' $B/api/tenants) $(cat /tmp/ui-body)"
-echo "bad name:                        $(c -b $J -X POST -H 'X-Tenant-UI: 1' -H 'content-type: application/json' -d '{"name":"../etc","spec":{"quota":{"gpus":0,"gpuMemoryMiB":0}}}' $B/api/tenants) $(cat /tmp/ui-body)"
-echo "delete without confirm:          $(c -b $J -X DELETE -H 'X-Tenant-UI: 1' -H 'content-type: application/json' -d '{"confirm":"wrong"}' $B/api/tenants/tenant-nv-b) $(cat /tmp/ui-body)"
+# Validation probes must be unable to create anything, whatever the current
+# limits are: a non-numeric value AND a name the server always rejects
+# (upper case). (A probe with gpus: 9 created a real tenant once the limit
+# went from 4 to 40.)
+echo "invalid spec:                    $(c -b $J -X POST -H 'X-Tenant-UI: 1' -H 'content-type: application/json' -d '{"name":"tenant-INVALID","spec":{"quota":{"gpus":"many","gpuMemoryMiB":1}}}' $B/api/tenants) $(cat /tmp/ui-body)  (want 400)"
+echo "bad name:                        $(c -b $J -X POST -H 'X-Tenant-UI: 1' -H 'content-type: application/json' -d '{"name":"../etc","spec":{"quota":{"gpus":0,"gpuMemoryMiB":0}}}' $B/api/tenants) $(cat /tmp/ui-body)  (want 400)"
+# An existing tenant, with a wrong confirmation: must be refused, nothing deleted.
+EXISTING=$(curl -s -b $J $B/api/overview | jq -r '.tenants[0].name // empty')
+if [ -n "$EXISTING" ]; then
+  echo "delete with wrong confirm:       $(c -b $J -X DELETE -H 'X-Tenant-UI: 1' -H 'content-type: application/json' -d '{"confirm":"wrong"}' $B/api/tenants/$EXISTING) $(cat /tmp/ui-body)  (want 400; $EXISTING untouched)"
+fi
 echo "path traversal (static):         $(c $B/..%2f..%2fetc%2fpasswd) $(c $B/%2e%2e/package.json)  (want 404 404)"
 echo "security headers:                $(curl -s -D - -o /dev/null $B/ | grep -ciE '^(content-security-policy|x-frame-options|x-content-type-options|referrer-policy):') of 4"
 echo "logout then overview:            $(c -b $J -X POST -H 'X-Tenant-UI: 1' $B/api/logout) $(c -b $J $B/api/overview)  (want 200 401)"
