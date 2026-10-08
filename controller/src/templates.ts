@@ -70,10 +70,25 @@ export class Templates {
     if (s.s3.enabled) network.push(...s3allow); else absent.push(...s3allow);
     const gateway = this.objects('gateway-ingress.yaml', v);
     if (s.gateway.expose) network.push(...gateway); else absent.push(...gateway);
+    // Quota lines the Tenant sets override the template's; the rest keep the
+    // template's values, so a Tenant that sets none renders exactly the
+    // runbook's quota.
+    const quota = this.objects('tenant-quota.yaml', v);
+    const rq = quota.find((o) => o.kind === 'ResourceQuota') as { spec: { hard: Record<string, string> } } | undefined;
+    if (rq) {
+      const q = s.quota;
+      const set = (k: string, val: string | number | undefined) => { if (val !== undefined) rq.spec.hard[k] = String(val); };
+      set('requests.cpu', q.cpu?.requests);
+      set('limits.cpu', q.cpu?.limits);
+      set('requests.memory', q.memory?.requests);
+      set('limits.memory', q.memory?.limits);
+      set('pods', q.pods);
+      set('persistentvolumeclaims', q.persistentVolumeClaims);
+    }
     return {
       present: {
         Namespace: [namespace],
-        Quota: this.objects('tenant-quota.yaml', v),
+        Quota: quota,
         Network: network,
         Metrics: this.objects('tenant-prom-proxy.yaml', v),
       },

@@ -53,6 +53,21 @@ spec:
                 properties:
                   gpus: { type: integer, minimum: 0, maximum: 4 }
                   gpuMemoryMiB: { type: integer, minimum: 0, maximum: 184272 }
+                  # Optional. Unset keeps manifests/midori/tenant-quota.yaml's
+                  # value. A quota caps a tenant; it reserves nothing, and
+                  # limits above node capacity are overcommit.
+                  cpu:
+                    type: object
+                    properties:
+                      requests: { x-kubernetes-int-or-string: true, pattern: '^[0-9]+(\.[0-9]+)?m?$' }
+                      limits: { x-kubernetes-int-or-string: true, pattern: '^[0-9]+(\.[0-9]+)?m?$' }
+                  memory:
+                    type: object
+                    properties:
+                      requests: { type: string, pattern: '^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti)?$' }
+                      limits: { type: string, pattern: '^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti)?$' }
+                  pods: { type: integer, minimum: 1 }
+                  persistentVolumeClaims: { type: integer, minimum: 0 }
               network:
                 type: object
                 default: {}

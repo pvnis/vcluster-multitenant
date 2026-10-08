@@ -2,6 +2,6 @@ apiVersion: midori.phoenix/v1alpha1
 kind: Tenant
 metadata: { name: tenant-nv-b }
 spec:
-  management: Observe
+  management: Manage
   quota: { gpus: 2, gpuMemoryMiB: 92136 }
   controlPlane: { apiNodePort: 32043, size: small }

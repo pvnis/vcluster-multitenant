@@ -2,8 +2,15 @@ apiVersion: midori.phoenix/v1alpha1
 kind: Tenant
 metadata: { name: tenant-phoenix-serving }
 spec:
-  management: Observe
-  quota: { gpus: 4, gpuMemoryMiB: 184272 }
+  management: Manage
+  quota:
+    gpus: 4
+    gpuMemoryMiB: 184272
+    # CPU cores and system memory (DRAM) on the GPU nodes -- not GPU memory.
+    # Raised 2026-10-08 for the operator's models. limits.memory exceeds the
+    # two GPU nodes together (125.6 GiB): overcommit, not a reservation.
+    cpu: { requests: "20", limits: "36" }
+    memory: { requests: 96Gi, limits: 160Gi }
   network: { internet: true }
   controlPlane: { apiNodePort: 32243, size: large }
   gateway: { expose: true }

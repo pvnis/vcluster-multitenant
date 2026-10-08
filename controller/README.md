@@ -24,7 +24,15 @@ kind: Tenant
 metadata: { name: tenant-example }          # must start with tenant-, <= 32 chars
 spec:
   management: Manage                        # default Observe: changes nothing
-  quota: { gpus: 2, gpuMemoryMiB: 92136 }
+  quota:
+    gpus: 2                                 # whole GPUs a tenant may hold
+    gpuMemoryMiB: 92136                     # GPU memory (nvidia.com/gpumem)
+    # optional, unset = tenant-quota.yaml's value (12/24 CPU, 48/80Gi, 30 pods, 10 PVCs).
+    # CPU cores and system memory (DRAM), not GPU memory:
+    cpu: { requests: "20", limits: "36" }
+    memory: { requests: 96Gi, limits: 160Gi }
+    pods: 30
+    persistentVolumeClaims: 10
   network: { internet: true }               # tenant-internet.yaml instead of the standard floor
   controlPlane: { size: large }             # apiNodePort: allocated if omitted
   gateway: { expose: true }                 # gateway-ingress.yaml
@@ -39,7 +47,10 @@ kubectl -n tenant-system get secret tenant-example-credentials -o yaml   # S3 ke
 ```
 
 **Change a tenant**: edit its spec (quota, internet, gateway, dashboards).
-The controller reconciles on every change and every 5 minutes.
+The controller reconciles on every change and every 5 minutes, and owns
+what it applies: a hand edit of, say, the ResourceQuota is reverted on the
+next pass. A quota caps a tenant and reserves nothing; lowering it below
+current use evicts nothing, it only refuses new pods.
 
 **Delete a tenant** destroys its control plane and data, so it takes two
 steps; a plain `kubectl delete` only reports `Blocked`:

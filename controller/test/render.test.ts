@@ -87,3 +87,17 @@ test('dashboards load', () => {
   assert.equal(T.dashboard('overview').uid, 'tenant-overview');
   assert.equal(T.dashboard('serving').uid, 'tenant-serving');
 });
+
+test('quota: set lines override the template, unset lines keep it', () => {
+  const base = T.render(tenant('tenant-q', { quota: { gpus: 4, gpuMemoryMiB: 184272 } }));
+  const hardOf = (r: ReturnType<typeof T.render>) => (r.present.Quota.find((o) => o.kind === 'ResourceQuota') as any).spec.hard;
+  const b = hardOf(base);
+  const r = T.render(tenant('tenant-q', { quota: { gpus: 4, gpuMemoryMiB: 184272,
+    cpu: { requests: '20', limits: '36' }, memory: { requests: '96Gi', limits: '160Gi' } } }));
+  const h = hardOf(r);
+  assert.deepEqual([h['requests.cpu'], h['limits.cpu'], h['requests.memory'], h['limits.memory']], ['20', '36', '96Gi', '160Gi']);
+  // everything else untouched
+  for (const k of ['pods', 'persistentvolumeclaims', 'requests.nvidia.com/gpu', 'requests.nvidia.com/gpumem']) assert.equal(h[k], b[k], k);
+  assert.deepEqual([b['requests.cpu'], b['limits.cpu'], b['requests.memory'], b['limits.memory']], ['12', '24', '48Gi', '80Gi']);
+});
+

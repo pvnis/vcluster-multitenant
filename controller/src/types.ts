@@ -16,7 +16,16 @@ export type Management = 'Observe' | 'Manage';
 
 export interface TenantSpec {
   management: Management;
-  quota: { gpus: number; gpuMemoryMiB: number };
+  quota: {
+    gpus: number;
+    gpuMemoryMiB: number;
+    // Optional; unset keeps the value in manifests/midori/tenant-quota.yaml.
+    // Kubernetes quantities ("20", "96Gi").
+    cpu?: { requests?: string; limits?: string };
+    memory?: { requests?: string; limits?: string };
+    pods?: number;
+    persistentVolumeClaims?: number;
+  };
   network: { internet: boolean };
   controlPlane: { apiNodePort?: number; size: 'small' | 'large' };
   s3: { enabled: boolean };
@@ -72,7 +81,7 @@ export function withDefaults(t: Tenant): Tenant {
     ...t,
     spec: {
       management: s.management ?? 'Observe',
-      quota: s.quota ?? { gpus: 0, gpuMemoryMiB: 0 },
+      quota: { gpus: 0, gpuMemoryMiB: 0, ...(s.quota ?? {}) },
       network: { internet: s.network?.internet ?? false },
       controlPlane: { size: s.controlPlane?.size ?? 'small', apiNodePort: s.controlPlane?.apiNodePort },
       s3: { enabled: s.s3?.enabled ?? true },
