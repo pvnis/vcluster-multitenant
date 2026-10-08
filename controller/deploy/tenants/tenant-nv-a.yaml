@@ -3,5 +3,5 @@ kind: Tenant
 metadata: { name: tenant-nv-a }
 spec:
   management: Manage
-  quota: { gpus: 1, gpuMemoryMiB: 40000 }   # lowered in the UI, 2026-10-08 13:47 UTC
+  quota: { gpus: 1, gpuMemoryMiB: 10000 }   # GPUs lowered in the UI 2026-10-08 13:47 UTC; GPU memory to 10000 (slices only) the same day
   controlPlane: { apiNodePort: 31943, size: small }

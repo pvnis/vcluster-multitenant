@@ -389,6 +389,9 @@ applies to Managed tenants.)
 - Put S3 credentials inside a tenant's vCluster.
 - Leader election: run exactly one replica (the UI too: its sessions are in
   memory).
+- **Mixed GPU types**: whole-card GPU memory is made explicit assuming one
+  card size; what to do when cards differ is open --
+  [MIXED-GPUS.md](MIXED-GPUS.md).
 - **Google sign-in for the UI** (Midokura Workspace domain, per-user or
   per-group roles) is decided but deferred until a hostname, a certificate
   and a Google OAuth client exist: [GOOGLE-AUTH.md](GOOGLE-AUTH.md). Until
