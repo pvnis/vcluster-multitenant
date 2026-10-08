@@ -3,6 +3,9 @@
 # The password file holds the admin password (default ~/midori-build/tenant-ui-admin).
 B=$1; J=$(mktemp); P=$(cat "${2:-$HOME/midori-build/tenant-ui-admin}")
 c(){ curl -s -o /tmp/ui-body -w '%{http_code}' "$@"; }
+# Right after a rollout the NodePort can briefly lead nowhere (Recreate
+# strategy): wait for the UI rather than report every check as failed.
+for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' -m3 $B/healthz)" = 200 ] && break; sleep 2; done
 echo "unauthenticated overview:        $(c $B/api/overview)  (want 401)"
 echo "wrong password:                  $(c -X POST -H 'content-type: application/json' -d '{"user":"admin","password":"nope"}' $B/api/login)  (want 401)"
 echo "unknown user:                    $(c -X POST -H 'content-type: application/json' -d '{"user":"nobody","password":"nope"}' $B/api/login)  (want 401)"
