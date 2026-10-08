@@ -46,7 +46,8 @@
 #     --from-literal=RCLONE_CONFIG_RGW_SECRET_ACCESS_KEY=... \
 #     --from-literal=TENANT_NV_A_KEY=tenant-nv-a,<random> \
 #     --from-literal=TENANT_NV_B_KEY=tenant-nv-b,<random> \
-#     --from-literal=TENANT_PHOENIX_KEY=tenant-phoenix,<random>
+#     --from-literal=TENANT_PHOENIX_KEY=tenant-phoenix,<random> \
+#     --from-literal=TENANT_PHOENIX_SERVING_KEY=tenant-phoenix-serving,<random>
 # and in each vCluster, the matching half as default/s3-credentials
 # (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_ENDPOINT_URL).
 apiVersion: v1
@@ -77,6 +78,7 @@ spec:
         - --auth-key=$(TENANT_NV_A_KEY)
         - --auth-key=$(TENANT_NV_B_KEY)
         - --auth-key=$(TENANT_PHOENIX_KEY)
+        - --auth-key=$(TENANT_PHOENIX_SERVING_KEY)
         # rclone caches listings for 5 minutes by default, and an object
         # uploaded inside that window is NoSuchKey through the gateway while a
         # direct GET finds it (measured). Listings are cheap; keep this short.

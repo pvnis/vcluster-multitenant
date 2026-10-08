@@ -1,0 +1,27 @@
+# Overlay for tenant-phoenix-serving: Phoenix Serving (github.com/midokura/phoenix-serving)
+# installed whole INSIDE this vCluster -- cert-manager, its CRDs, the
+# AgentGateway and KServe controllers, the Gateway and the model. On
+# vm-nv-dmd1 the control plane was installed cluster-wide on the host and only
+# the model sat in a tenant namespace, so every request crossed the tenant
+# boundary; that write-up named "a Gateway inside each tenant" as the better
+# shape, and a vCluster is that. Applied after tenant.yaml, nv-tenant.yaml and
+# midori-tenant.yaml:
+#   vcluster create tenant-phoenix-serving -n tenant-phoenix-serving --values tenant.yaml \
+#     --values nv-tenant.yaml --values midori-tenant.yaml --values tenant-phoenix-serving.yaml
+controlPlane:
+  service:
+    httpsNodePort: 32243
+  # tenant.yaml's 1 CPU / 1Gi suits a tenant that only runs pods. This one
+  # installs cert-manager plus the KServe, GAIE, AgentGateway and Gateway API
+  # CRDs, several MB of schema, and at those limits the control plane fell
+  # over during the CRD install: kine's SQLite reads hit DeadlineExceeded,
+  # kube-controller-manager lost its lease and exited, and the pod restarted
+  # mid-install (helm saw "unexpected EOF").
+  statefulSet:
+    resources:
+      requests:
+        cpu: "1"
+        memory: 1Gi
+      limits:
+        cpu: "4"
+        memory: 4Gi

@@ -1,0 +1,117 @@
+# Public-internet egress for ONE tenant, in place of ../cilium/tenant-floor.yaml.
+#
+#   sed s/TENANT/tenant-phoenix-serving/g tenant-internet.yaml | kubectl apply -f -
+#
+# Revert by applying ../cilium/tenant-floor.yaml for the tenant (same policy
+# names) and deleting the CiliumNetworkPolicy `tenant-internet` below.
+#
+# The standard floor denies a tenant all egress outside the pod and service
+# CIDRs, and because Cilium denies beat allows, no allow can reopen it. These
+# are the same two CiliumClusterwideNetworkPolicies with one change: the
+# egress deny covers private, CGNAT and link-local space instead of
+# 0.0.0.0/0. Everything else in them -- denying other tenants both ways --
+# is unchanged.
+#
+# Still denied, deliberately, because "internet" should mean the public
+# internet and these are not it:
+#   10.0.0.0/8      the project network (node APIs, other tenants' NodePorts,
+#                   the registry's NodePort), the OpenStack VIP 10.30.0.222
+#                   (Keystone, Nova, Neutron and RGW share it), the Ceph
+#                   network -- except the pod and service CIDRs, and the two
+#                   site resolvers, which get port 53 only (below);
+#   172.16.0.0/12   includes the site registry 172.20.0.250;
+#   192.168.0.0/16, 100.64.0.0/10 (CGNAT);
+#   169.254.0.0/16  the OpenStack metadata service (169.254.169.254).
+# Node IPs are NOT covered by any CIDR rule: Cilium classifies them by
+# identity (host, remote-node, kube-apiserver), and CIDR selectors never match
+# those. Tested from a tenant that allowed itself all egress: the node API
+# (10.30.30.31:6443, seen as kube-apiserver) and the registry's NodePort
+# (10.30.30.226:30500) were reachable through the CIDR deny. So the three
+# identities are denied by name below. Tenant workloads need none of them:
+# their API server is the vCluster's own pod, and their DNS is a pod too.
+#
+# DNS: the tenant's own CoreDNS forwards to the site resolvers 10.30.30.10
+# and .11 (kubelet's resolv.conf), so external names need them; they are cut
+# out of the deny and allowed on 53 only.
+---
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: TENANT-floor
+spec:
+  endpointSelector:
+    matchLabels:
+      io.cilium.k8s.namespace.labels.tenant: TENANT
+    matchExpressions:
+      - {key: io.cilium.k8s.policy.serviceaccount, operator: NotIn, values: [vc-TENANT]}
+  ingressDeny:
+    - fromEndpoints:
+        - matchExpressions:
+            - {key: io.cilium.k8s.namespace.labels.tenant, operator: Exists}
+            - {key: io.cilium.k8s.namespace.labels.tenant, operator: NotIn, values: [TENANT]}
+  egressDeny:
+    - toEndpoints:
+        - matchExpressions:
+            - {key: io.cilium.k8s.namespace.labels.tenant, operator: Exists}
+            - {key: io.cilium.k8s.namespace.labels.tenant, operator: NotIn, values: [TENANT]}
+    - toEntities: [host, remote-node, kube-apiserver]
+    - toCIDRSet:
+        - cidr: 10.0.0.0/8
+          except:
+            - 10.42.0.0/16    # pod CIDR
+            - 10.43.0.0/16    # service CIDR
+            - 10.30.30.10/32  # site resolver (53 only, allowed below)
+            - 10.30.30.11/32  # site resolver
+        - cidr: 172.16.0.0/12
+        - cidr: 192.168.0.0/16
+        - cidr: 100.64.0.0/10
+        - cidr: 169.254.0.0/16
+---
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: TENANT-floor-workloads
+spec:
+  endpointSelector:
+    matchLabels:
+      vcluster.loft.sh/managed-by: TENANT
+  ingressDeny:
+    - fromEndpoints:
+        - matchExpressions:
+            - {key: io.cilium.k8s.namespace.labels.tenant, operator: Exists}
+            - {key: io.cilium.k8s.namespace.labels.tenant, operator: NotIn, values: [TENANT]}
+  egressDeny:
+    - toEndpoints:
+        - matchExpressions:
+            - {key: io.cilium.k8s.namespace.labels.tenant, operator: Exists}
+            - {key: io.cilium.k8s.namespace.labels.tenant, operator: NotIn, values: [TENANT]}
+    - toEntities: [host, remote-node, kube-apiserver]
+    - toCIDRSet:
+        - cidr: 10.0.0.0/8
+          except:
+            - 10.42.0.0/16    # pod CIDR
+            - 10.43.0.0/16    # service CIDR
+            - 10.30.30.10/32  # site resolver (53 only, allowed below)
+            - 10.30.30.11/32  # site resolver
+        - cidr: 172.16.0.0/12
+        - cidr: 192.168.0.0/16
+        - cidr: 100.64.0.0/10
+        - cidr: 169.254.0.0/16
+---
+# The allow. The floor only stops denying; ../cilium/tenant-allow.yaml's
+# allow-list still governs, so the public internet has to be allowed here.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata: { name: tenant-internet, namespace: TENANT }
+spec:
+  endpointSelector:
+    matchLabels: { vcluster.loft.sh/managed-by: TENANT }
+  egress:
+    - toCIDRSet:
+        - cidr: 0.0.0.0/0
+          except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]
+    - toCIDR: [10.30.30.10/32, 10.30.30.11/32]
+      toPorts:
+        - ports:
+            - {port: "53", protocol: UDP}
+            - {port: "53", protocol: TCP}
