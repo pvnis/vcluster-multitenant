@@ -69,7 +69,7 @@ datasources:
         secureJsonData:
           # Multi-tenant query (loki querier.multi_tenant_queries_enabled).
           # Add each new tenant here.
-          httpHeaderValue1: platform|tenant-nv-a|tenant-nv-b|tenant-phoenix|tenant-phoenix-serving
+          httpHeaderValue1: platform|tenant-nv-a|tenant-nv-b|tenant-phoenix-serving
       - name: Alertmanager
         uid: alertmanager
         type: alertmanager

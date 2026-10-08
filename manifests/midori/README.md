@@ -16,7 +16,10 @@ built** wins.
     runsc         gvisor gpuslicing e6a06cbce (runsc, shim, webhook), systrap
     HAMi          2.9.0, 20 nvidia.com/gpu per node
     vCluster      0.36.1: tenant-nv-a (:31943, 4 GPUs), tenant-nv-b (:32043, 2 GPUs),
-                  tenant-phoenix (:32143, 2 GPUs; Phoenix Serving, see phoenix/)
+                  tenant-phoenix-serving (:32243, 4 GPUs, public internet;
+                  Phoenix Serving platform, model left to its operator)
+                  [tenant-phoenix (:32143) was deleted 2026-10-08; phoenix/
+                  keeps its recipe]
                   kubeconfigs in ~/tenants/ on midori-cp-0
     observability midori-eye-0 (10.30.30.204): Prometheus, Loki, Grafana :30300,
                   an admin view and one view per tenant -- see observability/

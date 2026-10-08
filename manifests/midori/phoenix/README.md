@@ -3,6 +3,14 @@
 Phoenix Serving (`github.com/midokura/phoenix-serving` @ 9b8513a, unmodified)
 serving Qwen3.5-4B on midori, built 2026-10-07.
 
+**tenant-phoenix was deleted on 2026-10-08** (vCluster, namespace and its
+volume, floor policies, Prometheus proxy, S3 gateway key, Grafana org and
+user). This file stays as the recipe and the record of what it took;
+`../../../values/tenant-phoenix.yaml` stays because it is the template for the
+vCluster overlay. Its successor is **tenant-phoenix-serving** (4 GPUs, public
+internet via `../tenant-internet.yaml`), where the platform layer is installed
+as below and the model is left to the tenant's operator.
+
 Unlike vm-nv-dmd1, where the serving control plane was installed cluster-wide
 on the host and only the model sat in a tenant namespace (so every request
 crossed the tenant boundary), **the whole stack runs inside the tenant's

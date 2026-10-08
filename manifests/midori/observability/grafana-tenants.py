@@ -23,7 +23,7 @@ What a tenant org contains, and why it is safe:
 import base64, json, os, secrets, sys, urllib.error, urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SERVING_TENANTS = {"tenant-phoenix", "tenant-phoenix-serving"}  # orgs that also get the vLLM dashboard
+SERVING_TENANTS = {"tenant-phoenix-serving"}  # orgs that also get the vLLM dashboard
 
 
 class Grafana:
