@@ -59,17 +59,6 @@ datasources:
         url: http://kps-kube-prometheus-stack-prometheus.observability.svc:9090
         isDefault: true
         orgId: 1
-      - name: Loki (all tenants)
-        uid: loki
-        type: loki
-        url: http://loki.observability.svc:3100
-        orgId: 1
-        jsonData:
-          httpHeaderName1: X-Scope-OrgID
-        secureJsonData:
-          # Multi-tenant query (loki querier.multi_tenant_queries_enabled).
-          # Add each new tenant here.
-          httpHeaderValue1: platform|tenant-nv-a|tenant-nv-b|tenant-phoenix-serving
       - name: Alertmanager
         uid: alertmanager
         type: alertmanager
@@ -77,6 +66,14 @@ datasources:
         orgId: 1
         jsonData: { implementation: prometheus }
 sidecar:
+  # The admin org's "Loki (all tenants)" datasource is provisioned from
+  # Secret grafana-datasource-loki-admin (label grafana_datasource), which the
+  # tenant controller keeps listing every Tenant -- so a new tenant needs no
+  # edit here.
+  datasources:
+    enabled: true
+    label: grafana_datasource
+    searchNamespace: observability
   dashboards:
     enabled: true
     label: grafana_dashboard

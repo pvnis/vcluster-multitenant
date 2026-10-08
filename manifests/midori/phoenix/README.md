@@ -52,7 +52,7 @@ All paths are relative to this repo; `$T` is
    `KUBECONFIG=$T ./s3-credentials.sh ~/midori-build/s3keys/tenant-phoenix`.
 6. **Model**: `KUBECONFIG=$T helm install phoenix-serving charts/phoenix-serving
    -n inference-serving -f values-model.yaml`.
-7. **Host side**: `kubectl apply -f gateway-ingress.yaml`, so clients outside
+7. **Host side**: `sed s/TENANT/<tenant>/g gateway-ingress.yaml | kubectl apply -f -`, so clients outside
    the cluster reach the Gateway's NodePort.
 
 ## Verified

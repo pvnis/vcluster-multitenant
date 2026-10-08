@@ -43,12 +43,12 @@
 # Secrets, created out of band (never commit them):
 #   kubectl -n s3-gateway create secret generic s3-gateway \
 #     --from-literal=RCLONE_CONFIG_RGW_ACCESS_KEY_ID=... \
-#     --from-literal=RCLONE_CONFIG_RGW_SECRET_ACCESS_KEY=... \
-#     --from-literal=TENANT_NV_A_KEY=tenant-nv-a,<random> \
-#     --from-literal=TENANT_NV_B_KEY=tenant-nv-b,<random> \
-#     --from-literal=TENANT_PHOENIX_SERVING_KEY=tenant-phoenix-serving,<random>
-# and in each vCluster, the matching half as default/s3-credentials
-# (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_ENDPOINT_URL).
+#     --from-literal=RCLONE_CONFIG_RGW_SECRET_ACCESS_KEY=...
+# Tenant keys are NOT in this file or that Secret. They live in Secret
+# s3-gateway-tenant-keys, one entry per tenant ("<access>,<secret>"), written
+# by the tenant controller (controller/), which also restarts this Deployment
+# when they change. The container turns each entry into an --auth-key flag at
+# startup, so adding a tenant never edits this manifest.
 apiVersion: v1
 kind: Namespace
 metadata: { name: s3-gateway }
@@ -67,30 +67,37 @@ spec:
       containers:
       - name: rclone
         image: rclone/rclone:1.75.1
+        # Flags are built at startup: the fixed ones below, plus one
+        # --auth-key per file in /keys (Secret s3-gateway-tenant-keys).
+        #   --dir-cache-time=10s   rclone caches listings for 5 minutes by
+        #     default, and an object uploaded inside that window is NoSuchKey
+        #     through the gateway while a direct GET finds it (measured).
+        #   --use-server-modtime   without it rclone HEADs every object for its
+        #     mtime; at ~1 s per RGW request, listing Qwen3.5-4B (45 objects)
+        #     took 50-71 s and KServe's storage-initializer timed out.
+        #   --no-check-certificate RGW's certificate is signed by KollaTestCA,
+        #     which nothing trusts. Install that CA and drop this.
+        #   --metrics-addr          Prometheus (observability/scrape.yaml).
+        # FAIL CLOSED: `rclone serve s3` with no --auth-key serves WITHOUT
+        # authentication, so with no keys the container exits instead.
+        command: ["/bin/sh", "-c"]
         args:
-        - serve
-        - s3
-        - "gw:"
-        - --addr=:8080
-        - --read-only
-        # The tenant key pairs. Kubernetes expands $(VAR) from the Secret.
-        - --auth-key=$(TENANT_NV_A_KEY)
-        - --auth-key=$(TENANT_NV_B_KEY)
-        - --auth-key=$(TENANT_PHOENIX_SERVING_KEY)
-        # rclone caches listings for 5 minutes by default, and an object
-        # uploaded inside that window is NoSuchKey through the gateway while a
-        # direct GET finds it (measured). Listings are cheap; keep this short.
-        - --dir-cache-time=10s
-        # Without this rclone HEADs every object to read its mtime metadata,
-        # and RGW answers each request in about a second: listing Qwen3.5-4B
-        # (45 objects) took 50-71 s, past boto's read timeout, and KServe's
-        # storage-initializer failed on the listing. With it: 5.6-8 s.
-        - --use-server-modtime
-        # RGW's certificate is signed by KollaTestCA, which nothing trusts.
-        # Install that CA and drop this.
-        - --no-check-certificate
-        # Prometheus (observability/scrape.yaml).
-        - --metrics-addr=:9250
+          - |
+            set -eu
+            set -- serve s3 "gw:" --addr=:8080 --read-only --dir-cache-time=10s \
+              --use-server-modtime --no-check-certificate --metrics-addr=:9250
+            n=0
+            for f in /keys/*; do
+              [ -f "$f" ] || continue
+              set -- "$@" "--auth-key=$(cat "$f")"
+              n=$((n + 1))
+            done
+            if [ "$n" -eq 0 ]; then
+              echo "no tenant keys in /keys: refusing to serve without authentication" >&2
+              exit 1
+            fi
+            echo "serving with $n tenant key(s)"
+            exec rclone "$@"
         envFrom: [{ secretRef: { name: s3-gateway } }]
         env:
         - { name: RCLONE_CONFIG_RGW_TYPE, value: s3 }
@@ -108,8 +115,14 @@ spec:
           requests: { cpu: 100m, memory: 128Mi }
           limits: { cpu: "2", memory: 1Gi }
         securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true }
-        volumeMounts: [{ name: tmp, mountPath: /tmp }, { name: cache, mountPath: /root/.cache }]
-      volumes: [{ name: tmp, emptyDir: {} }, { name: cache, emptyDir: {} }]
+        volumeMounts:
+          - { name: tmp, mountPath: /tmp }
+          - { name: cache, mountPath: /root/.cache }
+          - { name: keys, mountPath: /keys, readOnly: true }
+      volumes:
+        - { name: tmp, emptyDir: {} }
+        - { name: cache, emptyDir: {} }
+        - { name: keys, secret: { secretName: s3-gateway-tenant-keys, defaultMode: 0400 } }
 ---
 apiVersion: v1
 kind: Service

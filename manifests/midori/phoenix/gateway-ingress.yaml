@@ -1,7 +1,7 @@
-# Host side, in tenant-phoenix: lets clients outside the cluster reach Phoenix
+# Host side, in the tenant namespace: lets clients outside the cluster reach Phoenix
 # Serving's Gateway on its NodePort.
 #
-#   kubectl apply -f gateway-ingress.yaml          (host kubeconfig)
+#   sed s/TENANT/<tenant>/g gateway-ingress.yaml | kubectl apply -f -   (host kubeconfig)
 #
 # Every tenant namespace is default-deny ingress (tenant-netpol.yaml), and the
 # Gateway's Service is type LoadBalancer -- which stays <pending> without
@@ -16,11 +16,11 @@
 # expose any of ITS OWN pods on 8080 this way -- never another tenant's.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
-metadata: { name: allow-gateway-ingress, namespace: tenant-phoenix }
+metadata: { name: allow-gateway-ingress, namespace: TENANT }
 spec:
   endpointSelector:
     matchLabels:
-      vcluster.loft.sh/managed-by: tenant-phoenix
+      vcluster.loft.sh/managed-by: TENANT
       gateway.networking.k8s.io/gateway-name: phoenix-serving-gateway
   ingress:
   - fromEntities: [world, remote-node, host]
