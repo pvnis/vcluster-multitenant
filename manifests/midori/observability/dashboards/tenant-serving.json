@@ -54,7 +54,9 @@
      "placement": "right",
      "calcs": [
       "lastNotNull"
-     ]
+     ],
+     "sortBy": "Name",
+     "sortDesc": false
     },
     "tooltip": {
      "mode": "multi"
@@ -113,7 +115,9 @@
      "placement": "right",
      "calcs": [
       "lastNotNull"
-     ]
+     ],
+     "sortBy": "Name",
+     "sortDesc": false
     },
     "tooltip": {
      "mode": "multi"
@@ -164,7 +168,9 @@
      "placement": "right",
      "calcs": [
       "lastNotNull"
-     ]
+     ],
+     "sortBy": "Name",
+     "sortDesc": false
     },
     "tooltip": {
      "mode": "multi"
@@ -226,7 +232,9 @@
      "placement": "right",
      "calcs": [
       "lastNotNull"
-     ]
+     ],
+     "sortBy": "Name",
+     "sortDesc": false
     },
     "tooltip": {
      "mode": "multi"
@@ -285,7 +293,9 @@
      "placement": "right",
      "calcs": [
       "lastNotNull"
-     ]
+     ],
+     "sortBy": "Name",
+     "sortDesc": false
     },
     "tooltip": {
      "mode": "multi"
@@ -356,7 +366,9 @@
      "placement": "right",
      "calcs": [
       "lastNotNull"
-     ]
+     ],
+     "sortBy": "Name",
+     "sortDesc": false
     },
     "tooltip": {
      "mode": "multi"
@@ -415,7 +427,9 @@
      "placement": "right",
      "calcs": [
       "lastNotNull"
-     ]
+     ],
+     "sortBy": "Name",
+     "sortDesc": false
     },
     "tooltip": {
      "mode": "multi"

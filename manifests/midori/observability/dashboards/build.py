@@ -75,7 +75,11 @@ def ts(title, targets, unit="short", ds=PROM, stack=False, desc=None):
     p = {"type": "timeseries", "title": title, "datasource": ds,
          "fieldConfig": {"defaults": {"unit": unit, "custom": {"fillOpacity": 10,
                          "stacking": {"mode": "normal" if stack else "none"}}}, "overrides": []},
-         "options": {"legend": {"displayMode": "table", "placement": "right", "calcs": ["lastNotNull"]},
+         # Legend sorted by series name by default, so "midori-nv-0 gpu0" comes
+         # before "midori-nv-0 gpu1" before "midori-nv-1 gpu0" -- node, then GPU.
+         # Without it the order is whatever Prometheus returns.
+         "options": {"legend": {"displayMode": "table", "placement": "right", "calcs": ["lastNotNull"],
+                                "sortBy": "Name", "sortDesc": False},
                      "tooltip": {"mode": "multi"}},
          "targets": [{"refId": chr(65 + i), "expr": e, "legendFormat": l, "datasource": ds}
                      for i, (e, l) in enumerate(targets)]}
