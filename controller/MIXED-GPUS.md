@@ -72,6 +72,10 @@ card type. Avoids the problem; costs flexibility.
 
 ## To decide
 
+The wider question (which model on which card, chosen automatically) and a
+concrete answer to option B are in [../HETEROGENEOUS-GPUS.md](../HETEROGENEOUS-GPUS.md).
+
+
 1. Will midori (or its successors) mix card types, and which?
 2. Should tenants be granted capacity per class (B), or is one pool with
    steering enough (C)?
