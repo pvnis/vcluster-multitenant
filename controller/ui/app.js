@@ -304,8 +304,8 @@ function renderDetail(t) {
   const kv = (pairs) => h('dl', { class: 'kv' }, pairs.flatMap(([k, v]) => [h('dt', { text: k }), h('dd', {}, v)]));
   const quota = QUOTA_ORDER.filter(([k]) => t.quota[k]).map(([k, label, kind]) => {
     const l = t.quota[k];
-    const used = kind === 'count' || kind === 'mib' ? Number(l.used) : qty(l.used);
-    const hard = kind === 'count' || kind === 'mib' ? Number(qty(l.hard)) : qty(l.hard);
+    // Quantities, not plain numbers: Kubernetes writes 78000 as "78k".
+    const used = qty(l.used), hard = qty(l.hard);
     return h('div', { class: 'qline' },
       h('div', { class: 'label' }, h('span', { text: label }), h('span', { class: 'mono', text: `${fmt(kind, used)} / ${fmt(kind, hard)}` })),
       bar(used, undefined, hard));
