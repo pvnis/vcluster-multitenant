@@ -24,6 +24,9 @@ whose four cards were all held.
   scratch tenant (whole-GPU pod refused under a 10000 MiB quota, admitted
   and charged 46068 under a one-card quota; slices and percentage pods
   unchanged; vCluster's syncer leaves the host-side change alone).
+  Since 2026-10-09 (`8256a2d49`) percentages and `gpucores: 100` pods are
+  stated in MiB of the same card too, and quotas bound
+  `midori.phoenix/gpu-memory` (MiB x GPUs).
   This is correct **only while every card has the same memory**: at admission
   the webhook cannot know which card the pod will land on.
 
@@ -38,6 +41,9 @@ With, say, A6000s (48 GB) and H100s (80 GB) in one cluster:
   GiB of it stranded for anyone else wanting a whole card.
 
 ## Options
+
+Everything the webhook turns into MiB (whole cards, percentages,
+`gpucores: 100`) depends on that one card size.
 
 **A. Size-free whole cards: `nvidia.com/gpumem-percentage: 100`.**
 HAMi's own way to say "all of whichever card" (it cannot be combined with

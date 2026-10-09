@@ -217,24 +217,43 @@ Up to 10 pods share a card. A pod that names no `gpumem` takes the
 **whole** card, and HAMi will not put a fractional pod on a card a whole-GPU
 pod holds -- so whole-GPU pods anywhere block sharing on their cards.
 
-Whole cards are charged in full. The gVisor webhook
-(`--nvidia-whole-card-mib=46068`) gives a pod that asks for GPUs but neither
-`nvidia.com/gpumem` nor `nvidia.com/gpumem-percentage` a card's memory per
-GPU, as limit and request. That happens on the host side only; the tenant's
-own copy of the pod is unchanged. So a tenant runs N whole cards only with
-`gpuMemoryMiB` of at least N x 46068. A smaller quota (tenant-nv-a's 10000)
-means slices only, and a whole-GPU pod stays Pending in the tenant with
+GPU memory is charged for what a pod holds. The gVisor webhook
+(`--nvidia-whole-card-mib=46068`) restates on the host pod, leaving the
+tenant's own copy unchanged:
+
+| the pod asks for | charged per GPU |
+| --- | --- |
+| `nvidia.com/gpu` only (whole cards) | 46068 MiB, a full card |
+| `nvidia.com/gpumem-percentage: P` | P% of 46068 MiB (it becomes `gpumem`) |
+| `nvidia.com/gpucores: 100` (HAMi gives it the card alone) | 46068 MiB, whatever `gpumem` it named |
+| `nvidia.com/gpumem: M` | M |
+
+It then sets `midori.phoenix/gpu-memory` = that x the pod's GPUs
+(`--gpu-memory-total-resource`), overwriting any value the tenant gave, and
+`quota.gpuMemoryMiB` bounds that resource. So a 2-GPU whole-card pod is
+charged 92136, and a tenant runs N whole cards only with `gpuMemoryMiB` of
+at least N x 46068. A pod over quota stays Pending in the tenant with
 `SyncError ... exceeded quota: tenant-quota, requested:
-requests.nvidia.com/gpumem=46068`. The value assumes every card is an A6000.
-For mixed cards see [MIXED-GPUS.md](MIXED-GPUS.md).
+requests.midori.phoenix/gpu-memory=...`. All of this assumes every card is
+an A6000; for mixed cards see [MIXED-GPUS.md](MIXED-GPUS.md).
+
+**Quotas may overcommit; cards never do.** The UI shows the tenants'
+GPU-memory quotas against the cluster's 184272 MiB, and nothing stops the
+sum going past it: that is the operator's choice. A pod is only *placed*
+where a card has the memory free, by HAMi's scheduler. A pod that finds no
+room waits, Pending, with `FailedScheduling ... NodeUnfitPod`, and starts
+when room frees up. Tenants cannot go around that: HAMi's webhook refuses
+node-pinned GPU pods and rewrites `default-scheduler` to its own, and a
+pod naming any other scheduler is never scheduled at all.
 
 The tenant's quota follows the same split:
 
 - `quota.gpus` counts **attachments**, not cards: three pods sharing one
   card use 3. Up to 40 (4 cards x 10 shares). Set it generously for a tenant
   running many small GPU pods.
-- `quota.gpuMemoryMiB` bounds the GPU memory its pods request, whole cards
-  included (46068 each, above). (A multi-GPU pod's `gpumem` is charged once, though it gets
+- `quota.gpuMemoryMiB` bounds the GPU memory its pods hold, summed over
+  each pod's GPUs, whole cards at 46068 (above). This is the measure of
+  cards. (A multi-GPU pod's `gpumem` is charged once, though it gets
   that much on each card; gVisor still enforces it per card.)
 - `quota.gpuCores` (optional) bounds the GPU time its pods request; 100 = one
   card's time.
@@ -245,10 +264,9 @@ host quota (`exceeded quota ... requests.nvidia.com/gpucores`), the others
 admitted (90 of 100), each with its gVisor memory limit and weight. Earlier,
 two tenant pods sharing one A6000 at 75/25 split its compute 2.66 : 1.
 
-The UI's capacity counts attachments against slots (40), and cannot tell a
-whole-card attachment from a shared one; a cluster whose four cards are all
-held whole reads "4 / 40 slots" and still has room for no fractional pod.
-Grafana's "GPU memory held" and DCGM panels show the physical picture.
+The UI leads with GPU memory, the measure of cards. Attachments are shown
+against the 40 slots as a count of GPU pods; on their own they say nothing
+about cards (four whole cards read "4 / 40 slots").
 
 ## Phoenix Serving in a tenant
 
@@ -322,7 +340,7 @@ Do that one tenant at a time and check the tenant's workloads after each.
 | --- | --- | --- |
 | `management` | `Observe` | `Manage` applies; `Observe` only reports drift |
 | `quota.gpus` | required | GPU **attachments** (sum of pods' `nvidia.com/gpu`), 0-40; see [Fractions of a GPU](#fractions-of-a-gpu) |
-| `quota.gpuMemoryMiB` | required | GPU memory, MiB, up to 184272 |
+| `quota.gpuMemoryMiB` | required | GPU memory, MiB, up to 184272: `requests.midori.phoenix/gpu-memory`, each pod's GPU memory x its GPUs |
 | `quota.gpuCores` | unlimited | GPU time (sum of pods' `nvidia.com/gpucores`), 100 = one card |
 | `quota.cpu.requests` / `.limits` | 12 / 24 | CPU cores on the GPU nodes |
 | `quota.memory.requests` / `.limits` | 48Gi / 80Gi | system memory (DRAM) |

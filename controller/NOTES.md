@@ -177,3 +177,47 @@ first real test is that tenant's next vLLM restart. Its quota, 184272, is
 exactly four cards.
 
 tenant-nv-a's GPU memory quota went to 10000 the same day: slices only.
+
+## GPU memory measures cards (2026-10-09)
+
+Attachments counted GPU pods, not cards, so they said nothing about
+overcommit. GPU memory is now the measure, with three holes closed in the
+gVisor webhook (gpuslicing `8256a2d49`):
+
+- `nvidia.com/gpumem-percentage` was charged nothing: now P% of a card, in
+  MiB.
+- `nvidia.com/gpucores: 100` makes HAMi give the pod a card alone
+  (`HAMi/pkg/device/nvidia/device.go`), yet it was charged only the `gpumem`
+  it named: now a full card.
+- `gpumem` is per GPU, so a 2-GPU pod was charged once: quotas now bound
+  `midori.phoenix/gpu-memory` = gpumem x GPUs, which the webhook sets and
+  HAMi's scheduler ignores (hand-added to its ConfigMap).
+
+Decided with the operator: quotas may overcommit (an operator choice); cards
+may not, and that is HAMi's placement: a pod that finds no room waits,
+Pending. Not rejected at creation: a Deployment would recreate a rejected pod
+in a loop, vCluster shows a tenant Pending either way, and a rejecting
+webhook would have to repeat HAMi's per-card fit and could race with it.
+
+Tested on a scratch tenant `tenant-gmem` (6 attachments, 46068 MiB; deleted):
+25% -> 11517; an 8000 slice -> 8000; a 2-GPU pod claiming
+`midori.phoenix/gpu-memory: 1` with 4000 each -> corrected to 8000; then
+2 whole GPUs (92136) and `gpucores: 100` + 1000 MiB (46068) refused by the
+quota. Admitted pods waited `NodeUnfitPod` (tenant-phoenix-serving holds all
+four cards), not "Insufficient midori.phoenix/gpu-memory". A host pod asking
+for the resource ran on a node that does not advertise it (kubelet drops it).
+Getting around HAMi's placement: a node-pinned pod was refused by HAMi's
+webhook ("pod has node assigned"), `default-scheduler` was rewritten to
+`hami-scheduler`, and an invented scheduler name leaves the pod Pending for
+good.
+
+Found on the way: tenant-phoenix-serving's quota kept the old
+`requests.nvidia.com/gpumem` line after the template dropped it. That quota
+was created with `kubectl apply` before the controller adopted it, and the
+key was co-owned by `kubectl-client-side-apply`, so the controller's
+server-side apply could not remove it. Removed by hand (JSON patch). Other
+pre-adoption keys may linger the same way.
+
+Not yet seen: a whole-card pod running under the new runsc limit (no card
+free). tenant-phoenix-serving's vLLM pods predate all this and are charged 0
+until they restart.

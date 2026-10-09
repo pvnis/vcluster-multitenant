@@ -13,7 +13,7 @@ built** wins.
     k3s           v1.36.5+k3s1, 3 servers (embedded etcd) + 2 agents
     Cilium        1.19.8, KPR, Socket LB Coverage: Hostns-only (checked)
     driver        610.43.02 open, gpuslicing 423ceb90, built on each GPU node
-    runsc         gvisor gpuslicing e6a06cbce (runsc, shim), systrap; webhook 4409f996b
+    runsc         gvisor gpuslicing e6a06cbce (runsc, shim), systrap; webhook 8256a2d49
     HAMi          2.9.0, 20 nvidia.com/gpu per node
     vCluster      0.36.1: tenant-nv-a (:31943, 4 GPUs), tenant-nv-b (:32043, 2 GPUs),
                   tenant-phoenix-serving (:32243, 4 GPUs, public internet;
@@ -333,10 +333,31 @@ no certificate Secret. Keep `failurePolicy: Fail` — it is a security property,
 not an availability preference: a pod admitted without being mutated carries no
 limit annotation and runs at the node ceiling.
 
-`--nvidia-whole-card-mib=46068` (gpuslicing `4409f996b`): a container asking for
-`nvidia.com/gpu` with no `nvidia.com/gpumem` or `nvidia.com/gpumem-percentage`
-is given a card's memory per GPU, so the tenants' GPU-memory quotas charge
-whole cards. One card size only; see `../../controller/MIXED-GPUS.md`.
+GPU memory quotas (gpuslicing `8256a2d49`):
+
+- `--nvidia-whole-card-mib=46068`: whole-card pods, `gpumem-percentage` pods and
+  `gpucores: 100` pods (HAMi gives those a card alone) are restated in
+  `nvidia.com/gpumem` MiB of a 46068 MiB card. One card size only; see
+  `../../controller/MIXED-GPUS.md`.
+- `--gpu-memory-total-resource=midori.phoenix/gpu-memory`: every GPU container
+  also asks for gpumem x GPUs under that name, which `tenant-quota.yaml` bounds
+  (gpumem is per GPU, so a quota on it charged a 2-GPU pod once).
+
+Nothing advertises `midori.phoenix/gpu-memory`. The scheduler must ignore it,
+so it is added by hand to HAMi's scheduler ConfigMap, after the
+`nvidia.com/gpumem-percentage` entry, and the scheduler restarted. Do this
+**before** the webhook flag: until then GPU pods fail with "Insufficient
+midori.phoenix/gpu-memory". (Kubelets drop extended resources their node does
+not have, so no node needs it.) Not via `helm upgrade`, which would undo this
+step's other hand patches; the chart's only hook for it,
+`devices.awsneuron.customresources`, is misnamed for the purpose.
+
+```bash
+kubectl -n kube-system get cm hami-scheduler -o json \
+ | jq '.data["config.yaml"] |= sub("    name: nvidia.com/gpumem-percentage\n"; "    name: nvidia.com/gpumem-percentage\n  - ignoredByScheduler: true\n    name: midori.phoenix/gpu-memory\n")' \
+ | kubectl apply -f -
+kubectl -n kube-system rollout restart deploy/hami-scheduler
+```
 
 ## Step 7 — storage, and model weights without RWX
 

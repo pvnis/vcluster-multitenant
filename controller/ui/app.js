@@ -147,10 +147,10 @@ const swatch = (name) => h('span', { class: 'swatch', style: `background:${tenan
 // tenants (their quotas) against what the GPU nodes have, divided by tenant.
 // What pods request right now is shown beneath, secondary.
 const RESOURCES = [
-  { key: 'requests.nvidia.com/gpu', cap: 'gpus', label: 'GPU attachments', kind: 'count', unit: 'cards',
-    capacityOf: (c) => c.cards,
-    note: (c) => `Against the ${c.cards} cards: the worst case, every attachment a whole card. Sharing fits up to ${c.cards ? Math.round(c.gpus.capacity / c.cards) : 10} pods on a card.` },
-  { key: 'requests.nvidia.com/gpumem', cap: 'gpuMemoryMiB', label: 'GPU memory', kind: 'mib', unit: '', held: true },
+  { key: 'requests.midori.phoenix/gpu-memory', cap: 'gpuMemoryMiB', label: 'GPU memory', kind: 'mib', unit: '', held: true,
+    note: (c) => `The measure of cards: a whole card is ${fmt('mib', c.cards ? c.gpuMemoryMiB.capacity / c.cards : 46068)}, a slice its size, on each of a pod's GPUs. Quotas may overcommit; a pod that finds no room on a card waits, Pending, and is never placed past a card's memory.` },
+  { key: 'requests.nvidia.com/gpu', cap: 'gpus', label: 'GPU attachments', kind: 'count', unit: 'slots',
+    note: (c) => `How many GPUs a tenant's pods attach to, whole or shared: a count of pods, not of cards. Up to ${c.cards ? Math.round(c.gpus.capacity / c.cards) : 10} share a card.` },
   { key: 'requests.nvidia.com/gpucores', cap: 'gpuCores', label: 'GPU time', kind: 'count', unit: '(100 = one card)', optional: true,
     note: () => 'A weight, not a cap: idle time goes to whoever is busy.' },
   { key: 'requests.cpu', cap: 'cpu', label: 'CPU', kind: 'cpu', unit: 'cores' },
@@ -218,7 +218,8 @@ function renderCapacity() {
         ? h('div', { class: 'requested muted' },
             'Held now: ', h('strong', { text: fmt('mib', gm.heldMiB) }), ` (${pctOf(gm.heldMiB, capacity)})`,
             ' — slices at their request, whole-GPU pods at a full card each',
-            gm.usedMiB !== null ? [' · in use on the cards: ', h('strong', { text: fmt('mib', gm.usedMiB) }), ` (${pctOf(gm.usedMiB, capacity)}, measured)`] : null)
+            gm.usedMiB !== null ? [' · in use on the cards: ', h('strong', { text: fmt('mib', gm.usedMiB) }), ` (${pctOf(gm.usedMiB, capacity)}, measured)`] : null,
+            r.note ? h('div', { text: r.note(c) }) : null)
         : h('div', { class: 'requested muted' },
             `Requested now: ${fmt(r.kind, requested)}${unitText}`,
             capacity > 0 ? ` (${pctOf(requested, capacity)})` : '',
@@ -267,7 +268,7 @@ function renderTenants() {
     h('td', {}, h('div', { class: 'name' }, swatch(t.name), t.name), h('small', { class: 'muted', text: t.spec.controlPlane.size === 'large' ? 'large control plane' : '' })),
     h('td', {}, h('div', { class: 'chips' }, statusChips(t))),
     h('td', {}, miniQuota(t.quota['requests.nvidia.com/gpu'], 'count', ' GPUs')),
-    h('td', {}, miniQuota(t.quota['requests.nvidia.com/gpumem'], 'mib', '', data.gpuMemory?.available ? (data.gpuMemory.heldByTenant[t.name] ?? 0) : undefined)),
+    h('td', {}, miniQuota(t.quota['requests.midori.phoenix/gpu-memory'], 'mib', '', data.gpuMemory?.available ? (data.gpuMemory.heldByTenant[t.name] ?? 0) : undefined)),
     h('td', {}, miniQuota(t.quota['requests.cpu'], 'cpu', ' cores')),
     h('td', {}, miniQuota(t.quota['requests.memory'], 'memory')),
     h('td', {}, h('span', { class: `chip ${t.spec.network.internet ? 'info' : ''}`, text: t.spec.network.internet ? 'internet' : 'isolated' })),
@@ -280,7 +281,7 @@ function renderTenants() {
 // ---------- detail -------------------------------------------------------------------
 
 const QUOTA_ORDER = [
-  ['requests.nvidia.com/gpu', 'GPU attachments', 'count'], ['requests.nvidia.com/gpumem', 'GPU memory', 'mib'],
+  ['requests.nvidia.com/gpu', 'GPU attachments', 'count'], ['requests.midori.phoenix/gpu-memory', 'GPU memory', 'mib'],
   ['requests.nvidia.com/gpucores', 'GPU time (100 = one card)', 'count'],
   ['requests.cpu', 'CPU requests', 'cpu'], ['limits.cpu', 'CPU limits', 'cpu'],
   ['requests.memory', 'Memory requests', 'memory'], ['limits.memory', 'Memory limits', 'memory'],

@@ -1,5 +1,5 @@
 # Host-side quota for a midori tenant. ../tenant-quota.yaml explains every axis
-# (and why the gpu count, not gpumem, is what actually bounds a tenant); this
+# (for b300; on midori GPU memory is the bound, see below); this
 # is that file sized for midori, parameterised like ../b300/tenant-quota.yaml:
 #
 #   sed -e s/NAMESPACE/tenant-nv-a/ -e s/GPUS/4/ -e s/GPUMEM/184272/ tenant-quota.yaml | kubectl apply -f -
@@ -9,13 +9,21 @@
 # (the plan asked for >=32 / >=128), so CPU and memory are what will bind
 # first: the vLLM measurement in ../midori/README.md (14 GiB request / 20 GiB
 # limit for a 4B model) means about two model servers per tenant here.
+#
+# GPU memory is bounded through midori.phoenix/gpu-memory, not
+# nvidia.com/gpumem: the gVisor webhook (--gpu-memory-total-resource) has every
+# GPU container ask for its gpumem times its GPUs under that name, after
+# stating whole cards, percentages and exclusive (gpucores 100) pods in MiB
+# (--nvidia-whole-card-mib). nvidia.com/gpumem is per GPU, so a quota on it
+# charged a 2-GPU pod for one. Nothing advertises midori.phoenix/gpu-memory;
+# HAMi's scheduler ignores it (a managed resource of its extender).
 apiVersion: v1
 kind: ResourceQuota
 metadata: { name: tenant-quota, namespace: NAMESPACE }
 spec:
   hard:
     requests.nvidia.com/gpu: "GPUS"
-    requests.nvidia.com/gpumem: "GPUMEM"
+    requests.midori.phoenix/gpu-memory: "GPUMEM"
     requests.cpu: "12"
     requests.memory: 48Gi
     limits.cpu: "24"

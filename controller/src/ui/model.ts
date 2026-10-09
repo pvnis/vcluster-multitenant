@@ -135,7 +135,7 @@ export function capacity(nodes: any[], quotas: any[], tenants: Tenant[]) {
   return {
     cards,
     gpus: line('requests.nvidia.com/gpu', gpus),
-    gpuMemoryMiB: line('requests.nvidia.com/gpumem', gpuMemMiB),
+    gpuMemoryMiB: line('requests.midori.phoenix/gpu-memory', gpuMemMiB),
     gpuCores: line('requests.nvidia.com/gpucores', cards * 100),
     cpu: line('requests.cpu', cpu),
     memory: line('requests.memory', memory),

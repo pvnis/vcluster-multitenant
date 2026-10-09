@@ -56,8 +56,9 @@ spec:
                   # gpucores) still counts 1, so this bounds how many GPU pods
                   # a tenant may run; up to 40 = 4 cards x HAMi's 10 shares.
                   gpus: { type: integer, minimum: 0, maximum: 40 }
-                  # GPU memory, MiB, summed over the tenant's pods'
-                  # nvidia.com/gpumem: the fractional axis.
+                  # GPU memory, MiB, held by the tenant's pods: each pod's
+                  # nvidia.com/gpumem times its GPUs, whole cards at 46068
+                  # (requests.midori.phoenix/gpu-memory, set by the webhook).
                   gpuMemoryMiB: { type: integer, minimum: 0, maximum: 184272 }
                   # Optional: GPU time, summed over pods' nvidia.com/gpucores
                   # (100 = one whole card's time). Unset = not limited.

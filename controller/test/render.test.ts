@@ -41,7 +41,7 @@ test('standard tenant: the runbook objects, internet allow absent', () => {
   ]);
   const quota = r.present.Quota.find((o) => o.kind === 'ResourceQuota') as any;
   assert.equal(quota.spec.hard['requests.nvidia.com/gpu'], '4');
-  assert.equal(quota.spec.hard['requests.nvidia.com/gpumem'], '4096');
+  assert.equal(quota.spec.hard['requests.midori.phoenix/gpu-memory'], '4096');
 });
 
 test('internet tenant: internet floor, its allow present, no denial of 0.0.0.0/0', () => {
@@ -97,7 +97,7 @@ test('quota: set lines override the template, unset lines keep it', () => {
   const h = hardOf(r);
   assert.deepEqual([h['requests.cpu'], h['limits.cpu'], h['requests.memory'], h['limits.memory']], ['20', '36', '96Gi', '160Gi']);
   // everything else untouched
-  for (const k of ['pods', 'persistentvolumeclaims', 'requests.nvidia.com/gpu', 'requests.nvidia.com/gpumem']) assert.equal(h[k], b[k], k);
+  for (const k of ['pods', 'persistentvolumeclaims', 'requests.nvidia.com/gpu', 'requests.midori.phoenix/gpu-memory']) assert.equal(h[k], b[k], k);
   assert.deepEqual([b['requests.cpu'], b['limits.cpu'], b['requests.memory'], b['limits.memory']], ['12', '24', '48Gi', '80Gi']);
 });
 
