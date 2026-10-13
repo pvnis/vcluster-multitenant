@@ -221,3 +221,15 @@ pre-adoption keys may linger the same way.
 Not yet seen: a whole-card pod running under the new runsc limit (no card
 free). tenant-phoenix-serving's vLLM pods predate all this and are charged 0
 until they restart.
+
+## A mode switch the controller missed (2026-10-13)
+
+tenant-phoenix-claw was switched to Observe at 15:16:39 UTC and back to
+Manage at 15:16:45. The UI showed it Observing until 15:19:02, the next
+periodic resync. After emptying its queue, the worker ran the shared pass
+(the admin Loki header) while still marked busy. The watch queued the second
+switch, but `drain()` returned at once because the worker was busy, and the
+worker never re-checked the queue after that pass. The queue is now
+`src/workqueue.ts`, which loops until the queue is empty, shared pass
+included. `test/workqueue.test.ts` reproduces the race and fails on the old
+logic.

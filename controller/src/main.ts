@@ -7,6 +7,7 @@ import { Kube } from './kube.ts';
 import { Templates } from './templates.ts';
 import { reconcileTenant } from './reconcile.ts';
 import { reconcileAdminLoki } from './components/grafana.ts';
+import { WorkQueue } from './workqueue.ts';
 import { GROUP, PLURAL, VERSION, type Tenant } from './types.ts';
 
 const RESYNC_SECONDS = Number(process.env.RESYNC_SECONDS ?? 300);
@@ -21,30 +22,16 @@ const kube = Kube.load();
 const templates = new Templates(TEMPLATE_DIR);
 const log = (msg: string, extra: object = {}) => console.log(JSON.stringify({ ts: new Date().toISOString(), msg, ...extra }));
 
-const queue = new Set<string>();
-let running = false;
-
 async function get(name: string): Promise<Tenant | undefined> {
   return (await kube.read<Tenant>({ apiVersion: `${GROUP}/${VERSION}`, kind: 'Tenant', metadata: { name } }));
 }
 
-async function drain(): Promise<void> {
-  if (running) return;
-  running = true;
+async function work(name: string): Promise<void> {
   try {
-    while (queue.size) {
-      const name = queue.values().next().value as string;
-      queue.delete(name);
-      try {
-        const t = await get(name); // always the latest, never a stale event copy
-        if (t) await reconcileTenant(kube, templates, t, READ_ONLY);
-      } catch (e) {
-        log('reconcile failed', { tenant: name, error: e instanceof Error ? e.message : String(e) });
-      }
-    }
-    if (!READ_ONLY) await globals();
-  } finally {
-    running = false;
+    const t = await get(name); // always the latest, never a stale event copy
+    if (t) await reconcileTenant(kube, templates, t, READ_ONLY);
+  } catch (e) {
+    log('reconcile failed', { tenant: name, error: e instanceof Error ? e.message : String(e) });
   }
 }
 
@@ -65,9 +52,10 @@ async function globals(): Promise<void> {
   }
 }
 
+const queue = new WorkQueue(work, async () => { if (!READ_ONLY) await globals(); });
+
 async function enqueueAll(): Promise<void> {
-  for (const t of await kube.listTenants()) queue.add(t.metadata!.name!);
-  await drain();
+  await queue.add(...(await kube.listTenants()).map((t) => t.metadata!.name!));
 }
 
 async function main(): Promise<void> {
@@ -86,8 +74,7 @@ async function main(): Promise<void> {
     // waits for the resync.
     const fresh = t.metadata?.generation !== t.status?.observedGeneration;
     if (fresh || t.metadata?.deletionTimestamp) {
-      queue.add(t.metadata!.name!);
-      void drain();
+      void queue.add(t.metadata!.name!);
     }
   };
   informer.on('add', onChange);
