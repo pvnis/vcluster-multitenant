@@ -38,6 +38,11 @@ export interface TenantSpec {
   // Tenants whose models this one may call (each must have
   // modelProvider.enabled), at http://<provider>.model-providers:8080/v1.
   modelProviders: string[];
+  // OpenStack (Octavia) load balancers for this tenant's type: LoadBalancer
+  // Services: how many (ResourceQuota services.loadbalancers; 0 = none) and
+  // whether they may take a public floating IP
+  // (manifests/midori/load-balancer-guard.yaml).
+  loadBalancers: { count: number; public: boolean };
 }
 
 export interface Condition {
@@ -96,6 +101,7 @@ export function withDefaults(t: Tenant): Tenant {
       observability: { dashboards: s.observability?.dashboards ?? ['overview'] },
       modelProvider: { enabled: s.modelProvider?.enabled ?? false },
       modelProviders: s.modelProviders ?? [],
+      loadBalancers: { count: s.loadBalancers?.count ?? 0, public: s.loadBalancers?.public ?? false },
     },
   };
 }

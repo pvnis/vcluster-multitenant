@@ -53,6 +53,8 @@ export class Templates {
           gvisor: '',
           tenant: name,
           'pod-security.kubernetes.io/enforce': 'baseline',
+          // Read by manifests/midori/load-balancer-guard.yaml.
+          'midori.phoenix/load-balancers': s.loadBalancers.count > 0 ? (s.loadBalancers.public ? 'public' : 'internal') : 'none',
         },
       },
     };
@@ -88,6 +90,9 @@ export class Templates {
       set('persistentvolumeclaims', q.persistentVolumeClaims);
       // GPU time is unlimited unless the Tenant sets it (no template default).
       set('requests.nvidia.com/gpucores', q.gpuCores);
+      // Each one is an amphora VM in the shared OpenStack project: none unless
+      // the Tenant asks.
+      rq.spec.hard['services.loadbalancers'] = String(s.loadBalancers.count);
     }
     // Models: the broker in front of this tenant's Gateway, if it offers it,
     // and this tenant's side of each provider it may call.

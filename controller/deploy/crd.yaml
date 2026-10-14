@@ -126,6 +126,15 @@ spec:
               # Tenants whose models this one may call, at
               # http://<provider>.model-providers:8080/v1 (each provider must
               # have modelProvider.enabled; its API key is still required).
+              # OpenStack load balancers for type: LoadBalancer Services.
+              loadBalancers:
+                type: object
+                default: {}
+                properties:
+                  count: { type: integer, minimum: 0, maximum: 10, default: 0 }
+                  # May a Service ask for a public floating IP
+                  # (annotation service.beta.kubernetes.io/openstack-internal-load-balancer: "false")?
+                  public: { type: boolean, default: false }
               modelProviders:
                 type: array
                 default: []

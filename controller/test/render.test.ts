@@ -182,3 +182,18 @@ test('sandboxes: every per-tenant allow excludes them; their own policy is defau
   assert.deepEqual(sandbox.spec.ingress, [{ fromEntities: ['host'] }]);
   assert.equal(sandbox.spec.egress, undefined);
 });
+
+test('load balancers: none by default; count becomes the quota, public the namespace label', () => {
+  const none = T.render(tenant('tenant-x', {}));
+  const hard = (r: any) => (r.present.Quota.find((o: any) => o.kind === 'ResourceQuota') as any).spec.hard;
+  const label = (r: any) => (r.present.Namespace[0].metadata as any).labels['midori.phoenix/load-balancers'];
+  assert.equal(hard(none)['services.loadbalancers'], '0');
+  assert.equal(label(none), 'none');
+  const internal = T.render(tenant('tenant-x', { loadBalancers: { count: 2 } }));
+  assert.equal(hard(internal)['services.loadbalancers'], '2');
+  assert.equal(label(internal), 'internal');
+  const pub = T.render(tenant('tenant-x', { loadBalancers: { count: 1, public: true } }));
+  assert.equal(label(pub), 'public');
+  // public without any count grants nothing
+  assert.equal(label(T.render(tenant('tenant-x', { loadBalancers: { count: 0, public: true } }))), 'none');
+});
