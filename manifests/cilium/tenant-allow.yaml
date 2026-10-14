@@ -28,6 +28,10 @@ spec:
   endpointSelector:
     matchLabels:
       vcluster.loft.sh/managed-by: TENANT
+    # Pods labelled midori.phoenix/network=sandbox get none of this (nor the
+    # internet, S3 or model-provider allows): see tenant-sandbox below.
+    matchExpressions:
+      - {key: midori.phoenix/network, operator: NotIn, values: [sandbox]}
 
   ingress:
     # A tenant's own pods reach each other, and its control plane reaches them
@@ -71,3 +75,30 @@ spec:
       toPorts:
         - ports:
             - {port: "443", protocol: TCP}
+---
+# Sandboxes: pods a tenant labels midori.phoenix/network=sandbox (agent-sandbox
+# templates, for instance) to run code it trusts less than its own. They are
+# left out of every per-tenant allow -- this file's, tenant-internet,
+# tenant-s3-gateway, model-provider-* -- so the only traffic they get is what
+# the tenant's own NetworkPolicy for them allows, inside the floor as ever.
+#
+# Policies only ever add allows, so without the label a sandbox's own
+# NetworkPolicy could not take away what the platform grants every pod.
+#
+# This policy selects them in both directions with enableDefaultDeny, so a
+# labelled pod with no NetworkPolicy of its own is closed, not open: the label
+# can only remove access. The node's kubelet probes stay allowed.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: tenant-sandbox
+  namespace: TENANT
+spec:
+  endpointSelector:
+    matchLabels:
+      vcluster.loft.sh/managed-by: TENANT
+      midori.phoenix/network: sandbox
+  enableDefaultDeny: { ingress: true, egress: true }
+  ingress:
+    - fromEntities:
+        - host

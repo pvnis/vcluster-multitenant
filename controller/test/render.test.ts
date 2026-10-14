@@ -32,6 +32,7 @@ test('standard tenant: the runbook objects, internet allow absent', () => {
     'CiliumNetworkPolicy/tenant-nv-a/allow-prometheus-scrape',
     'CiliumNetworkPolicy/tenant-nv-a/tenant-baseline-allow',
     'CiliumNetworkPolicy/tenant-nv-a/tenant-s3-gateway',
+    'CiliumNetworkPolicy/tenant-nv-a/tenant-sandbox',
     'NetworkPolicy/tenant-nv-a/allow-same-tenant',
     'NetworkPolicy/tenant-nv-a/default-deny-ingress',
   ]);
@@ -156,4 +157,28 @@ test('model consumer: the broker Service is replicated in beside the S3 gateway'
   ]);
   const plain = T.vclusterValues(tenant('tenant-x', {}), 31000) as any;
   assert.deepEqual(plain.networking.replicateServices.fromHost, [{ from: 's3-gateway/s3-gateway', to: 's3-gateway/s3-gateway' }]);
+});
+
+test('sandboxes: every per-tenant allow excludes them; their own policy is default-deny both ways', () => {
+  const r = T.render(tenant('tenant-x', { network: { internet: true }, modelProviders: ['tenant-ps'] }));
+  const allows = [...r.present.Network, ...r.present.Models].filter((o: any) =>
+    o.kind === 'CiliumNetworkPolicy' && o.metadata.namespace === 'tenant-x' && (o.spec.egress || o.spec.ingress) &&
+    o.spec.endpointSelector?.matchLabels?.['vcluster.loft.sh/managed-by'] === 'tenant-x' &&
+    !o.spec.endpointSelector?.matchLabels?.['midori.phoenix/network']) as any[];
+  // Allows aimed at specific pods by the tenant's own labels (the Gateway's
+  // ingress, the Prometheus scrape) are not grants to every pod.
+  const grants = allows.filter((o) => o.spec.egress);
+  assert.deepEqual(grants.map((o) => o.metadata.name).sort(),
+    ['model-provider-tenant-ps', 'tenant-baseline-allow', 'tenant-internet', 'tenant-s3-gateway']);
+  for (const o of grants) {
+    assert.ok(o.spec.endpointSelector.matchExpressions?.some((e: any) =>
+      e.key === 'midori.phoenix/network' && e.operator === 'NotIn' && e.values.includes('sandbox')), o.metadata.name);
+  }
+  const sameTenant = r.present.Network.find((o) => o.metadata?.name === 'allow-same-tenant') as any;
+  assert.deepEqual(sameTenant.spec.podSelector.matchExpressions,
+    [{ key: 'midori.phoenix/network', operator: 'NotIn', values: ['sandbox'] }]);
+  const sandbox = r.present.Network.find((o) => o.metadata?.name === 'tenant-sandbox') as any;
+  assert.deepEqual(sandbox.spec.enableDefaultDeny, { ingress: true, egress: true });
+  assert.deepEqual(sandbox.spec.ingress, [{ fromEntities: ['host'] }]);
+  assert.equal(sandbox.spec.egress, undefined);
 });

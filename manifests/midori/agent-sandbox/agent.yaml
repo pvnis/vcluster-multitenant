@@ -1,0 +1,116 @@
+# A minimal agent on agent-sandbox: it asks the model for Python, runs it in a
+# warm-pool sandbox through sandboxd, and hands the output back to the model.
+# Tenant kubeconfig; needs the model link (Tenant spec.modelProviders) and its
+# API key as Secret agents/model-key (key: key, no trailing newline):
+#
+#   kubectl -n agents create secret generic model-key --from-literal=key="$(tr -d '\n' < KEYFILE)"
+#   kubectl apply -f agent.yaml && kubectl -n agents logs -f job/agent-demo
+#
+# It reaches sandboxes directly (in-cluster Service mode), so it must carry the
+# label the template's NetworkPolicy admits (app: agent). It needs Kubernetes
+# API access only to claim and release sandboxes.
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: agent, namespace: agents }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: agent, namespace: agents }
+rules:
+- apiGroups: [extensions.agents.x-k8s.io]
+  resources: [sandboxclaims]
+  verbs: [create, get, list, watch, delete]
+- apiGroups: [extensions.agents.x-k8s.io]
+  resources: [sandboxwarmpools, sandboxtemplates]
+  verbs: [get, list, watch]
+- apiGroups: [agents.x-k8s.io]
+  resources: [sandboxes]
+  verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: agent, namespace: agents }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: agent }
+subjects: [{ kind: ServiceAccount, name: agent, namespace: agents }]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: agent-demo, namespace: agents }
+data:
+  agent.py: |
+    import json, os, re, time, urllib.request
+    from k8s_agent_sandbox import SandboxClient, SandboxdInClusterConnectionConfig
+
+    BASE = "http://tenant-phoenix-serving.model-providers:8080/v1"
+    KEY = os.environ["MODEL_KEY"].strip()
+    MODEL = os.environ.get("MODEL", "Qwen3.8-27B")
+
+    def llm(messages):
+        req = urllib.request.Request(BASE + "/chat/completions", method="POST",
+            data=json.dumps({"model": MODEL, "messages": messages, "max_tokens": 2000}).encode(),
+            headers={"Authorization": "Bearer " + KEY, "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=300) as r:
+            return json.load(r)["choices"][0]["message"]["content"]
+
+    def run(sb, cmd):
+        r = sb.commands.run(cmd)
+        out = (getattr(r, "stdout", "") or "") + (getattr(r, "stderr", "") or "")
+        code = getattr(r, "exit_code", getattr(r, "returncode", "?"))
+        return code, out.strip()
+
+    def step(title, value):
+        print(f"--- {title}\n{value}\n", flush=True)
+
+    client = SandboxClient(connection_config=SandboxdInClusterConnectionConfig(mode="in-cluster-service"))
+    t0 = time.time()
+    sb = client.create_sandbox(warmpool="python", namespace="agents")
+    step("sandbox claimed from the warm pool", f"{time.time() - t0:.1f} s")
+    try:
+        step("where am I (inside the sandbox)", run(sb, "uname -a; dmesg 2>&1 | head -2; id"))
+        step("sandbox -> internet (must fail)", run(sb, "python3 -c \"import urllib.request as u; u.urlopen('http://example.com', timeout=5)\""))
+        step("sandbox DNS (must fail)", run(sb, "python3 -c \"import socket; print(socket.gethostbyname('kubernetes.default'))\""))
+        peer = os.environ.get("PEER_IP")
+        own = run(sb, "hostname -i")[1].split()
+        if peer and peer not in own:  # the claimed sandbox may be the one named
+            step(f"sandbox -> another sandbox {peer}:8080 (must fail)", run(sb, f"python3 -c \"import urllib.request as u; u.urlopen('http://{peer}:8080/v1/health', timeout=5)\""))
+        step("sandbox -> model broker (must fail)", run(sb, "python3 -c \"import urllib.request as u; u.urlopen('http://tenant-phoenix-serving.model-providers:8080/v1/models', timeout=5)\""))
+
+        task = ("Write a Python 3 program that prints the 30th Fibonacci number (fib(1)=fib(2)=1) "
+                "and the SHA-256 hex digest of the string 'midori'. Reply with only the code in a ```python block.")
+        t1 = time.time()
+        reply = llm([{"role": "user", "content": task}])
+        m = re.search(r"```python\n(.*?)```", reply, re.S)
+        code = m.group(1) if m else reply
+        step(f"model wrote ({time.time() - t1:.1f} s)", code.strip())
+        sb.files.write("main.py", code.encode())
+        rc, output = run(sb, "python3 main.py")
+        step(f"ran in the sandbox (exit {rc})", output)
+        answer = llm([{"role": "user", "content": task}, {"role": "assistant", "content": reply},
+                      {"role": "user", "content": f"Program output:\n{output}\nState both results in one sentence."}])
+        step("model's answer", answer.strip())
+    finally:
+        sb.terminate()
+        step("sandbox released", "ok")
+---
+apiVersion: batch/v1
+kind: Job
+metadata: { name: agent-demo, namespace: agents }
+spec:
+  backoffLimit: 0
+  template:
+    metadata: { labels: { app: agent } }
+    spec:
+      serviceAccountName: agent
+      restartPolicy: Never
+      containers:
+      - name: agent
+        image: python:3.12-slim
+        command: [sh, -c, "pip install -q --root-user-action=ignore 'k8s-agent-sandbox[grpc]==1.0.6' && python /app/agent.py"]
+        env:
+        - { name: MODEL_KEY, valueFrom: { secretKeyRef: { name: model-key, key: key } } }
+        - { name: PEER_IP, value: "" }  # optional: another sandbox's pod IP, to check sandboxes cannot reach each other
+        resources:
+          requests: { cpu: 200m, memory: 256Mi }
+          limits: { cpu: "1", memory: 1Gi }
+        volumeMounts: [{ name: app, mountPath: /app }]
+      volumes: [{ name: app, configMap: { name: agent-demo } }]

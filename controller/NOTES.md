@@ -255,3 +255,25 @@ phoenix-claw itself installs, but its agent sandboxes cannot start under
 gVisor: OpenShell 0.1.x requires Landlock and seccomp user notification, and
 0.0.116 requires root plus SYS_ADMIN/NET_ADMIN.
 `manifests/midori/phoenix-claw/README.md` has the details.
+
+## Agent sandboxes and the sandbox label (2026-10-14)
+
+phoenix-claw's OpenShell cannot run under gVisor, so agent-sandbox v1.0.6 was
+tried on a scratch tenant, tenant-agents (`manifests/midori/agent-sandbox/`).
+It works: a 0.3 s claim from a warm pool, gVisor sandboxes, and an agent loop
+with Qwen3.8-27B through the model broker.
+
+It also exposed a platform gap. A sandbox's own "no egress" NetworkPolicy
+did nothing, because policies only add allows and every per-tenant platform
+allow (baseline, internet, S3, model providers, and the `allow-same-tenant`
+NetworkPolicy) selected every pod. Measured: the sandbox reached example.com
+and the model broker. Pods labelled `midori.phoenix/network: sandbox` are now
+excluded from all of them and get `tenant-sandbox`: default-deny in both
+directions, with only kubelet probes allowed. The label can only remove
+access, and it is inert for pods without it: every tenant was re-rendered
+with no drift, and the serving gateway and the claw-to-broker path were
+checked afterwards.
+
+On the way: the first version excluded sandboxes only from the CNPs. Listing
+the rendered objects in the test turned up `allow-same-tenant`, the plain
+NetworkPolicy, which still let any tenant pod into a sandbox.

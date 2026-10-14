@@ -16,6 +16,8 @@ spec:
   endpointSelector:
     matchLabels:
       vcluster.loft.sh/managed-by: TENANT
+    matchExpressions:   # not sandboxes (../cilium/tenant-allow.yaml, tenant-sandbox)
+      - {key: midori.phoenix/network, operator: NotIn, values: [sandbox]}
   egress:
   - toEndpoints:
     - matchLabels:
