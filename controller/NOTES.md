@@ -233,3 +233,25 @@ worker never re-checked the queue after that pass. The queue is now
 `src/workqueue.ts`, which loops until the queue is empty, shared pass
 included. `test/workqueue.test.ts` reproduces the race and fails on the old
 logic.
+
+## Model sharing between tenants (2026-10-13)
+
+Asked: phoenix-claw in tenant-phoenix-claw, with tenant-phoenix-serving's
+models. The tenant floor denies all tenant-to-tenant traffic, and a deny
+can't be overridden, so a direct allow was impossible. The other option,
+exempting the pair in both floors, would weaken the floor and tie each
+tenant's render to the other's spec. Instead, a broker sits in the neutral
+`model-providers` namespace (Tenant `spec.modelProvider` /
+`spec.modelProviders`; controller README, "Sharing models between tenants").
+Two things were found on the way:
+
+- The platform guard blocks tenant pods from every non-tenant pod; brokers
+  are exempted (`app=model-broker`), as the S3 gateway is.
+- The first probe from the consumer ran seconds after its vCluster restarted
+  for the new replicated Service, and failed. A minute later it passed. Not a
+  bug, but worth knowing when testing right after a change.
+
+phoenix-claw itself installs, but its agent sandboxes cannot start under
+gVisor: OpenShell 0.1.x requires Landlock and seccomp user notification, and
+0.0.116 requires root plus SYS_ADMIN/NET_ADMIN.
+`manifests/midori/phoenix-claw/README.md` has the details.

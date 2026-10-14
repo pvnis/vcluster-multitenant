@@ -1,0 +1,28 @@
+# Host side, in tenant-phoenix-claw: lets the cluster's nodes, and nothing
+# else, reach the phoenix-claw UI pod on port 80.
+#
+#   kubectl apply -f ui-from-nodes.yaml   (host kubeconfig)
+#
+# `kubectl port-forward` cannot reach gVisor pods (it dials 127.0.0.1 inside
+# the pod's network namespace, which gVisor's netstack does not listen on), so
+# the UI is reached through its host Service's ClusterIP over an SSH tunnel to a
+# node instead (README.md). ClusterIPs are not routed from outside the cluster,
+# and node identities are the only sources admitted here, so the UI is reachable
+# by whoever can SSH to a node and by no one on the lab network. The UI's auth
+# bypass makes that the only gate.
+#
+# Not managed by the tenant controller: it neither creates nor removes it.
+# Scope: app.kubernetes.io/component is the tenant's own label, so a tenant can
+# open any of ITS OWN pods labelled `ui` to the nodes this way, never another's.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata: { name: phoenix-claw-ui-from-nodes, namespace: tenant-phoenix-claw }
+spec:
+  endpointSelector:
+    matchLabels:
+      vcluster.loft.sh/managed-by: tenant-phoenix-claw
+      app.kubernetes.io/instance: agentic-platform
+      app.kubernetes.io/component: ui
+  ingress:
+  - fromEntities: [host, remote-node]
+    toPorts: [{ ports: [{ port: "80", protocol: TCP }] }]

@@ -32,6 +32,12 @@ export interface TenantSpec {
   s3: { enabled: boolean };
   gateway: { expose: boolean };
   observability: { dashboards: Array<'overview' | 'serving'> };
+  // This tenant's Phoenix Serving Gateway may be offered to other tenants,
+  // through a broker (manifests/midori/model-provider.yaml).
+  modelProvider: { enabled: boolean };
+  // Tenants whose models this one may call (each must have
+  // modelProvider.enabled), at http://<provider>.model-providers:8080/v1.
+  modelProviders: string[];
 }
 
 export interface Condition {
@@ -88,6 +94,8 @@ export function withDefaults(t: Tenant): Tenant {
       s3: { enabled: s.s3?.enabled ?? true },
       gateway: { expose: s.gateway?.expose ?? false },
       observability: { dashboards: s.observability?.dashboards ?? ['overview'] },
+      modelProvider: { enabled: s.modelProvider?.enabled ?? false },
+      modelProviders: s.modelProviders ?? [],
     },
   };
 }

@@ -1,0 +1,49 @@
+# A tenant's access to another tenant's models (a Tenant listing PROVIDER in
+# spec.modelProviders; the controller renders this file with CONSUMER and
+# PROVIDER). Runbook equivalent:
+#
+#   sed -e s/CONSUMER/tenant-phoenix-claw/g -e s/PROVIDER/tenant-phoenix-serving/g \
+#     model-consumer.yaml | kubectl apply -f -
+#
+# plus, in the consumer's vCluster values, the broker's Service replicated in:
+#
+#   networking.replicateServices.fromHost:
+#     - { from: model-providers/PROVIDER, to: model-providers/PROVIDER }
+#
+# so the consumer's pods call http://PROVIDER.model-providers:8080/v1 with
+# one of the provider's API keys. See model-provider.yaml for the broker.
+#
+# Consumer side: its workloads may reach the provider's broker, on 8080 only.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: model-provider-PROVIDER
+  namespace: CONSUMER
+  labels: { midori.phoenix/consumer: CONSUMER, midori.phoenix/provider: PROVIDER }
+spec:
+  endpointSelector:
+    matchLabels:
+      vcluster.loft.sh/managed-by: CONSUMER
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: model-providers
+        app: model-broker
+        midori.phoenix/provider: PROVIDER
+    toPorts: [{ ports: [{ port: "8080", protocol: TCP }] }]
+---
+# Broker side: this consumer's workloads, and no other tenant's, may connect.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: CONSUMER--PROVIDER
+  namespace: model-providers
+  labels: { midori.phoenix/consumer: CONSUMER, midori.phoenix/provider: PROVIDER }
+spec:
+  endpointSelector: { matchLabels: { app: model-broker, midori.phoenix/provider: PROVIDER } }
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: CONSUMER
+        vcluster.loft.sh/managed-by: CONSUMER
+    toPorts: [{ ports: [{ port: "8080", protocol: TCP }] }]

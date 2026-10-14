@@ -36,7 +36,9 @@ export class Templates {
       .filter((o): o is KubernetesObject => !!o && typeof o === 'object' && 'kind' in o);
   }
 
-  render(t: Tenant): Rendered {
+  // `others`: every other Tenant's name, so links to tenants this one no
+  // longer lists in modelProviders are rendered absent and removed.
+  render(t: Tenant, others: string[] = []): Rendered {
     const name = t.metadata!.name!;
     const s = t.spec;
     const v = { NAMESPACE: name, TENANT: name, GPUMEM: String(s.quota.gpuMemoryMiB), GPUS: String(s.quota.gpus) };
@@ -87,14 +89,27 @@ export class Templates {
       // GPU time is unlimited unless the Tenant sets it (no template default).
       set('requests.nvidia.com/gpucores', q.gpuCores);
     }
+    // Models: the broker in front of this tenant's Gateway, if it offers it,
+    // and this tenant's side of each provider it may call.
+    const models: KubernetesObject[] = [];
+    const modelsAbsent: KubernetesObject[] = [];
+    const provider = this.objects('model-provider.yaml', { PROVIDER: name });
+    if (s.modelProvider.enabled) models.push(...provider);
+    // The shared namespace stays: other providers' brokers live in it.
+    else modelsAbsent.push(...provider.filter((o) => o.kind !== 'Namespace'));
+    const consumer = (p: string) => this.objects('model-consumer.yaml', { CONSUMER: name, PROVIDER: p });
+    const providers = s.modelProviders.filter((p) => p !== name);
+    for (const p of providers) models.push(...consumer(p));
+    for (const p of others) if (p !== name && !providers.includes(p)) modelsAbsent.push(...consumer(p));
     return {
       present: {
         Namespace: [namespace],
         Quota: quota,
         Network: network,
+        Models: models,
         Metrics: this.objects('tenant-prom-proxy.yaml', v),
       },
-      absent: { Network: absent },
+      absent: { Network: absent, Models: modelsAbsent },
     };
   }
 
@@ -108,12 +123,20 @@ export class Templates {
         resources: { requests: { cpu: '1', memory: '1Gi' }, limits: { cpu: '4', memory: '4Gi' } },
       };
     }
-    return deepMerge(
+    const values = deepMerge(
       parse(this.raw('vcluster-tenant.yaml')),
       parse(this.raw('vcluster-nv-tenant.yaml')),
       parse(this.raw('vcluster-midori-tenant.yaml')),
       overlay,
-    );
+    ) as { networking?: { replicateServices?: { fromHost?: Array<{ from: string; to: string }> } } };
+    // Each model provider's broker, under the same name inside the vCluster
+    // (model-consumer.yaml). Appended: a merge would replace the S3 entry.
+    const providers = t.spec.modelProviders.filter((p) => p !== t.metadata!.name);
+    if (providers.length) {
+      const rs = ((values.networking ??= {}).replicateServices ??= {});
+      rs.fromHost = [...(rs.fromHost ?? []), ...providers.map((p) => ({ from: `model-providers/${p}`, to: `model-providers/${p}` }))];
+    }
+    return values;
   }
 
   dashboard(name: 'overview' | 'serving'): Record<string, unknown> {

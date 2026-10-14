@@ -116,6 +116,21 @@ spec:
                     type: array
                     default: [overview]
                     items: { type: string, enum: [overview, serving] }
+              # Offer this tenant's Phoenix Serving Gateway to other tenants
+              # through a broker (manifests/midori/model-provider.yaml).
+              modelProvider:
+                type: object
+                default: {}
+                properties:
+                  enabled: { type: boolean, default: false }
+              # Tenants whose models this one may call, at
+              # http://<provider>.model-providers:8080/v1 (each provider must
+              # have modelProvider.enabled; its API key is still required).
+              modelProviders:
+                type: array
+                default: []
+                maxItems: 8
+                items: { type: string, pattern: '^tenant-[a-z0-9]([-a-z0-9]*[a-z0-9])?$', maxLength: 32 }
           status:
             type: object
             x-kubernetes-preserve-unknown-fields: true

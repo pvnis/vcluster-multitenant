@@ -108,3 +108,52 @@ test('quota: gpuCores becomes requests.nvidia.com/gpucores, absent when unset', 
   assert.ok(!('requests.nvidia.com/gpucores' in hardOf({ quota: { gpus: 1, gpuMemoryMiB: 1 } })));
 });
 
+
+test('model provider: the broker and its Gateway allow; disabled leaves the shared namespace', () => {
+  const on = T.render(tenant('tenant-ps', { modelProvider: { enabled: true } }));
+  assert.deepEqual(names(on.present.Models), [
+    'CiliumNetworkPolicy/model-providers/tenant-ps',
+    'CiliumNetworkPolicy/tenant-ps/allow-model-broker',
+    'ConfigMap/model-providers/tenant-ps',
+    'Deployment/model-providers/tenant-ps',
+    'Namespace//model-providers',
+    'Service/model-providers/tenant-ps',
+    'Service/tenant-ps/model-gateway',
+  ]);
+  const text = JSON.stringify(on.present.Models);
+  assert.ok(!text.includes('PROVIDER') && !text.includes('CONSUMER'), 'placeholder left over');
+  assert.ok(text.includes('model-gateway.tenant-ps.svc.cluster.local:8080'));
+  const off = T.render(tenant('tenant-ps', {}));
+  assert.deepEqual(off.present.Models, []);
+  assert.equal(off.absent.Models.length, 6);
+  assert.ok(!off.absent.Models.some((o) => o.kind === 'Namespace'), 'must not delete the shared namespace');
+});
+
+test('model consumer: its allow and the broker-side allow; dropped providers absent; never itself', () => {
+  const r = T.render(tenant('tenant-c', { modelProviders: ['tenant-ps', 'tenant-c'] }), ['tenant-ps', 'tenant-old']);
+  assert.deepEqual(names(r.present.Models), [
+    'CiliumNetworkPolicy/model-providers/tenant-c--tenant-ps',
+    'CiliumNetworkPolicy/tenant-c/model-provider-tenant-ps',
+  ]);
+  // (Not a provider, so its own broker objects are absent too.)
+  const consumerSide = r.absent.Models.filter((o) => o.metadata?.labels?.['midori.phoenix/consumer']);
+  assert.deepEqual(names(consumerSide), [
+    'CiliumNetworkPolicy/model-providers/tenant-c--tenant-old',
+    'CiliumNetworkPolicy/tenant-c/model-provider-tenant-old',
+  ]);
+  // The broker admits only this consumer's synced workloads.
+  const broker = r.present.Models.find((o) => o.metadata?.namespace === 'model-providers') as any;
+  assert.deepEqual(broker.spec.ingress[0].fromEndpoints[0].matchLabels, {
+    'k8s:io.kubernetes.pod.namespace': 'tenant-c', 'vcluster.loft.sh/managed-by': 'tenant-c',
+  });
+});
+
+test('model consumer: the broker Service is replicated in beside the S3 gateway', () => {
+  const values = T.vclusterValues(tenant('tenant-c', { modelProviders: ['tenant-ps'] }), 31000) as any;
+  assert.deepEqual(values.networking.replicateServices.fromHost, [
+    { from: 's3-gateway/s3-gateway', to: 's3-gateway/s3-gateway' },
+    { from: 'model-providers/tenant-ps', to: 'model-providers/tenant-ps' },
+  ]);
+  const plain = T.vclusterValues(tenant('tenant-x', {}), 31000) as any;
+  assert.deepEqual(plain.networking.replicateServices.fromHost, [{ from: 's3-gateway/s3-gateway', to: 's3-gateway/s3-gateway' }]);
+});

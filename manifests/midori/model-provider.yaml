@@ -1,0 +1,137 @@
+# Model broker for a tenant that serves models to other tenants (a Tenant with
+# spec.modelProvider.enabled; the controller renders this file with PROVIDER =
+# that tenant). Runbook equivalent:
+#
+#   sed s/PROVIDER/tenant-phoenix-serving/g model-provider.yaml | kubectl apply -f -
+#
+# Tenants cannot reach each other: each tenant's floor (../cilium/tenant-floor.yaml)
+# denies traffic to and from every other tenant-labelled namespace, and an allow
+# can never override a deny. So a consumer reaches the provider's Phoenix
+# Serving Gateway through this broker instead, a plain TCP forwarder in the
+# neutral namespace model-providers (no tenant label, like s3-gateway):
+#
+#   consumer pod --8080--> model-providers/PROVIDER --8080--> PROVIDER's Gateway pod
+#
+# Who may use the broker is decided per consumer by model-consumer.yaml; with
+# no consumer, only the node (probes) reaches it. What a consumer may do once
+# connected is the Gateway's business: it still needs one of its API keys.
+#
+# The platform guard (platform-guard.yaml) exempts app=model-broker pods, as
+# it does app=s3-gateway, so tenant pods may reach them at all.
+apiVersion: v1
+kind: Namespace
+metadata: { name: model-providers }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: PROVIDER
+  namespace: model-providers
+  labels: { app: model-broker, midori.phoenix/provider: PROVIDER }
+data:
+  haproxy.cfg: |
+    global
+      log stdout format raw local0 warning
+    defaults
+      mode tcp
+      log global
+      timeout connect 5s
+      # Long completions stream for minutes; idle cut-off well above that.
+      timeout client 30m
+      timeout server 30m
+      timeout tunnel 30m
+    frontend models
+      bind :8080
+      default_backend gateway
+    backend gateway
+      server gateway model-gateway.PROVIDER.svc.cluster.local:8080 resolvers dns init-addr none
+    resolvers dns
+      parse-resolv-conf
+      hold valid 10s
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: PROVIDER
+  namespace: model-providers
+  labels: { app: model-broker, midori.phoenix/provider: PROVIDER }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: model-broker, midori.phoenix/provider: PROVIDER } }
+  template:
+    metadata:
+      labels: { app: model-broker, midori.phoenix/provider: PROVIDER }
+      annotations: { kubectl.kubernetes.io/default-container: haproxy }
+    spec:
+      automountServiceAccountToken: false
+      securityContext: { runAsNonRoot: true, runAsUser: 99, seccompProfile: { type: RuntimeDefault } }
+      containers:
+      - name: haproxy
+        image: haproxy:2.8.5-alpine
+        args: ["-f", "/etc/haproxy/haproxy.cfg"]
+        ports: [{ containerPort: 8080 }]
+        securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+        readinessProbe: { tcpSocket: { port: 8080 }, periodSeconds: 10 }
+        resources:
+          requests: { cpu: 20m, memory: 32Mi }
+          limits: { cpu: 500m, memory: 128Mi }
+        volumeMounts: [{ name: cfg, mountPath: /etc/haproxy }]
+      volumes: [{ name: cfg, configMap: { name: PROVIDER } }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: PROVIDER
+  namespace: model-providers
+  labels: { app: model-broker, midori.phoenix/provider: PROVIDER }
+spec:
+  selector: { app: model-broker, midori.phoenix/provider: PROVIDER }
+  ports: [{ name: http, port: 8080, targetPort: 8080 }]
+---
+# The broker accepts only what model-consumer.yaml allows per consumer, plus
+# the node's probes.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: PROVIDER
+  namespace: model-providers
+  labels: { midori.phoenix/provider: PROVIDER }
+spec:
+  endpointSelector: { matchLabels: { app: model-broker, midori.phoenix/provider: PROVIDER } }
+  ingress:
+  - fromEntities: [host]
+---
+# Host side, in the provider's namespace: a stable name for its Gateway pod
+# (the synced Service's name is vCluster-translated and hashed).
+apiVersion: v1
+kind: Service
+metadata:
+  name: model-gateway
+  namespace: PROVIDER
+  labels: { midori.phoenix/provider: PROVIDER }
+spec:
+  selector:
+    vcluster.loft.sh/managed-by: PROVIDER
+    gateway.networking.k8s.io/gateway-name: phoenix-serving-gateway
+  ports: [{ name: http, port: 8080, targetPort: 8080 }]
+---
+# Every tenant namespace is default-deny ingress: let the broker, and nothing
+# else from outside, reach the Gateway's listener.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-model-broker
+  namespace: PROVIDER
+  labels: { midori.phoenix/provider: PROVIDER }
+spec:
+  endpointSelector:
+    matchLabels:
+      vcluster.loft.sh/managed-by: PROVIDER
+      gateway.networking.k8s.io/gateway-name: phoenix-serving-gateway
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: model-providers
+        app: model-broker
+        midori.phoenix/provider: PROVIDER
+    toPorts: [{ ports: [{ port: "8080", protocol: TCP }] }]

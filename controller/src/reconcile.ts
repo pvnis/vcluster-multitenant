@@ -32,12 +32,15 @@ export async function reconcileTenant(kube: Kube, templates: Templates, raw: Ten
     await kube.patchTenant(name, { metadata: { finalizers: [...(t.metadata?.finalizers ?? []), FINALIZER] } });
   }
 
-  const r = templates.render(t);
+  const others = (await kube.listTenants()).map((o) => o.metadata!.name!).filter((n) => n !== name);
+  const r = templates.render(t, others);
   const steps: Array<[string, () => Promise<ComponentResult>]> = [
     // Order matters in Manage: the namespace before anything in it.
     ['Namespace', () => reconcileObjects(kube, 'Namespace', r.present.Namespace, [], mode)],
     ['Quota', () => reconcileObjects(kube, 'Quota', r.present.Quota, [], mode)],
     ['Network', () => reconcileObjects(kube, 'Network', r.present.Network, r.absent.Network ?? [], mode)],
+    // Before the vCluster: a consumer's vCluster replicates the broker's Service.
+    ['Models', () => reconcileObjects(kube, 'Models', r.present.Models, r.absent.Models ?? [], mode)],
     ['VCluster', () => reconcileVCluster(kube, templates, t)],
     ['S3', () => reconcileS3(kube, t)],
     ['Metrics', () => reconcileObjects(kube, 'Metrics', r.present.Metrics, [], mode)],
@@ -120,6 +123,11 @@ async function handleDeletion(kube: Kube, templates: Templates, t: Tenant): Prom
   await deleteGrafana(kube, name);
   await removeKey(kube, name);
   for (const o of r.present.Metrics) await kube.delete(o);
+  // Broker and consumer objects outside the tenant's namespace do not go with
+  // it; the shared model-providers Namespace itself stays.
+  for (const o of r.present.Models) {
+    if (o.kind !== 'Namespace' && o.metadata?.namespace !== name) await kube.delete(o);
+  }
   await deleteVCluster(name);
   const clusterScoped = (o: KubernetesObject) => !o.metadata?.namespace;
   for (const o of [...r.present.Network, ...(r.absent.Network ?? [])]) if (clusterScoped(o)) await kube.delete(o);

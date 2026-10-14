@@ -295,6 +295,43 @@ See [`../manifests/midori/phoenix/README.md`](../manifests/midori/phoenix/README
 for the model chart values and what to expect (READY stays
 `WaitingForGateway` even when it works; test with a request).
 
+## Sharing models between tenants
+
+Tenants cannot reach each other: the floor denies it, and no allow can
+override a deny. To let one tenant call another's models, the provider offers
+its Gateway and the consumer lists it:
+
+```bash
+kubectl patch tenant tenant-phoenix-serving --type merge -p '{"spec":{"modelProvider":{"enabled":true}}}'
+kubectl patch tenant tenant-phoenix-claw   --type merge -p '{"spec":{"modelProviders":["tenant-phoenix-serving"]}}'
+```
+
+The provider's reconcile runs a TCP forwarder, the broker, at
+`model-providers/<provider>`, in a namespace with no tenant label, like the S3
+gateway. It also adds a host Service selecting the provider's Gateway pod, and
+an ingress allow from the broker to that pod on port 8080 only
+(`manifests/midori/model-provider.yaml`).
+
+The consumer's reconcile adds three things (`manifests/midori/model-consumer.yaml`):
+- the broker's Service, replicated into its vCluster as
+  `<provider>.model-providers`;
+- an egress allow from its pods to the broker;
+- an allow on the broker naming it, so no other tenant gets through.
+
+The platform guard exempts broker pods as it exempts the S3 gateway. The
+consumer still needs one of the provider's API keys: issue one with Phoenix
+Serving's `scripts/gen-apikey.sh` against the provider's kubeconfig.
+
+Each side reconciles only its own objects. Removing a provider from
+`modelProviders` removes the consumer's allows; turning `modelProvider` off
+removes the broker. Deleting either tenant removes its objects in
+`model-providers`, but the namespace itself stays.
+
+Tested 2026-10-13, tenant-phoenix-claw → tenant-phoenix-serving:
+- From a claw pod, `/v1/models` lists the Gateway's models, and a completion on
+  `Qwen3.8-27B` returns.
+- A pod in a tenant that isn't listed times out at the broker.
+
 ## Delete a tenant
 
 Deleting destroys the tenant's control plane, its data and everything in
@@ -352,6 +389,8 @@ Do that one tenant at a time and check the tenant's workloads after each.
 | `s3.enabled` | `true` | a key on the S3 gateway |
 | `gateway.expose` | `false` | open a Phoenix Serving Gateway to outside clients |
 | `observability.dashboards` | `[overview]` | add `serving` for the vLLM dashboard |
+| `modelProvider.enabled` | `false` | offer this tenant's Phoenix Serving Gateway to other tenants, through a broker |
+| `modelProviders` | `[]` | tenants whose Gateway this one may call (each needs `modelProvider.enabled`) |
 
 ## When something is wrong
 

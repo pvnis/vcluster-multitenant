@@ -15,6 +15,8 @@ kubectl create configmap tenant-templates -n tenant-system --dry-run=client -o y
   --from-file=tenant-scrape-allow.yaml="$R/manifests/midori/observability/tenant-scrape-allow.yaml" \
   --from-file=tenant-prom-proxy.yaml="$R/manifests/midori/observability/tenant-prom-proxy.yaml" \
   --from-file=gateway-ingress.yaml="$R/manifests/midori/phoenix/gateway-ingress.yaml" \
+  --from-file=model-provider.yaml="$R/manifests/midori/model-provider.yaml" \
+  --from-file=model-consumer.yaml="$R/manifests/midori/model-consumer.yaml" \
   --from-file=vcluster-tenant.yaml="$R/values/tenant.yaml" \
   --from-file=vcluster-nv-tenant.yaml="$R/values/nv-tenant.yaml" \
   --from-file=vcluster-midori-tenant.yaml="$R/values/midori-tenant.yaml" \

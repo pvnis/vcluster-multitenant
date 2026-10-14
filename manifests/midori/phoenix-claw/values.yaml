@@ -1,0 +1,62 @@
+# phoenix-claw (github.com/midokura/phoenix-claw main at 57eaa10, OpenShell
+# 0.1.2) in tenant-phoenix-claw. Overrides the chart's values.yaml; the chart is
+# packaged from that commit (README.md) and kept in registry.midori:
+#
+#   helm upgrade --install agentic-platform \
+#     oci://registry.midori/midokura/charts/agentic-platform --version 0.0.0-main.765.g57eaa10 \
+#     -n agentic-platform -f values.yaml   (tenant kubeconfig; README.md for the namespace)
+#
+# Not the 2026.9-rc.1 release: it pins OpenShell 0.0.116, whose sandbox pods run
+# as root with SYS_ADMIN, NET_ADMIN, SYS_PTRACE, SYSLOG and AppArmor
+# unconfined, which the tenant's baseline Pod Security refuses. OpenShell 0.1.x
+# sandboxes run non-root with no added capabilities.
+#
+# - Images come from registry.midori (copied from ghcr.io with crane; see
+#   README.md), so no GitHub credential is stored in the cluster: no pull
+#   secrets anywhere.
+# - Sign-in: the chart's auth bypass. Every request maps to e2e@midokura.com,
+#   hence the single app tenant below. Nothing is exposed outside the cluster:
+#   only the nodes may reach the UI (ui-from-nodes.yaml), through an SSH tunnel
+#   (README.md), since kubectl port-forward cannot reach gVisor pods.
+# - The model provider (tenant-phoenix-serving through the model broker) is set
+#   per app tenant through the API after install: README.md.
+imagePullSecrets: []
+
+image:
+  tag: "0.0.0-main.765.g57eaa10"
+
+ingress:
+  enabled: false
+
+lifecycle:
+  image: registry.midori/midokura/agentic-lifecycle
+  openshell:
+    values:
+      server:
+        sandboxImage: registry.midori/midokura/phoenix-claw:d532ffd
+        sandboxImagePullSecrets: []
+
+ui:
+  image:
+    repository: registry.midori/midokura/agentic-ui
+
+api:
+  authBypass: true
+  image:
+    repository: registry.midori/midokura/agentic-api
+  env:
+    GOOGLE_REDIRECT_URI: "http://localhost:8080/api/auth/callback"
+    UI_REDIRECT_URI: "http://localhost:8080"
+    SANDBOX_IMAGE_TYPES:
+      openclaw:
+        label: OpenClaw Agent
+        image: registry.midori/midokura/phoenix-claw:d532ffd
+        kind: openclaw
+      base:
+        label: Standard OpenShell
+        image: nvcr.io/nvidia/base/ubuntu:24.04
+        kind: plain
+    TENANT_MAP: |
+      {
+        "tenant1": ["e2e@midokura.com"]
+      }

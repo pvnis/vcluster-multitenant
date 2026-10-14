@@ -92,3 +92,12 @@ test('GPU memory held: the UI and the admin Grafana panel use the same query', a
   const panel = dash.panels.find((p: any) => p.title === 'GPU memory held, by tenant');
   assert.equal(panel.targets[0].expr, HELD_BY_TENANT);
 });
+
+test('a UI edit keeps model sharing, which the form does not show', () => {
+  const edited = carryOver(
+    { modelProvider: { enabled: true }, modelProviders: ['tenant-ps'] } as never,
+    parseSpec({ quota: { gpus: 1, gpuMemoryMiB: 1000 } }),
+  );
+  assert.deepEqual(edited.modelProvider, { enabled: true });
+  assert.deepEqual(edited.modelProviders, ['tenant-ps']);
+});

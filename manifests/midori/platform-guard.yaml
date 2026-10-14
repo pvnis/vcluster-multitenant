@@ -19,11 +19,14 @@
 # This is the missing half of the floor: ingress to every endpoint in a
 # namespace WITHOUT a `tenant` label is denied from every endpoint in a
 # namespace WITH one. Deny beats allow, so nothing a tenant writes reopens it.
-# Two services tenants do need are carved out by leaving them out of the
+# Services tenants do need are carved out by leaving them out of the
 # selector:
 #   - cluster DNS (kube-system, k8s-app=kube-dns), which each tenant's own
 #     CoreDNS forwards to;
-#   - the S3 gateway, which authenticates per tenant and serves read-only.
+#   - the S3 gateway, which authenticates per tenant and serves read-only;
+#   - the model brokers (model-provider.yaml), whose own policy admits only the
+#     consumers model-consumer.yaml names, each of which still needs one of the
+#     provider's API keys.
 # Not affected: the host API server (an entity, not an endpoint; the floor
 # already handles it), replies to connections the platform opens (Prometheus
 # scraping tenant pods), and the vCluster control planes' own traffic to
@@ -42,7 +45,7 @@ spec:
     matchExpressions:
       - { key: io.cilium.k8s.namespace.labels.tenant, operator: DoesNotExist }
       - { key: k8s-app, operator: NotIn, values: [kube-dns] }
-      - { key: app, operator: NotIn, values: [s3-gateway] }
+      - { key: app, operator: NotIn, values: [s3-gateway, model-broker] }
   ingressDeny:
     - fromEndpoints:
         - matchExpressions:
