@@ -32,6 +32,11 @@ project's networks, ports, routers or floating IPs. Nova listing is 403. Kept
 on midori-cp-0 at `~/midori-build/octavia-appcred` (mode 600), never in git.
 Still needed: the same credential with `member` as well.
 
+**2026-10-14, later: provided.** A second credential with
+`load-balancer_member`, `member` and `reader` works for Octavia (provider
+`amphora`, unlimited quota), Neutron and Nova. It replaced the first in the same
+file.
+
 ## 2. No load balancer (Octavia)
 
 **Missing.** Without item 1, Octavia cannot be used.
@@ -50,6 +55,32 @@ Still needed: the same credential with `member` as well.
 `openstack-cloud-controller-manager` to fill in `status.loadBalancer`. The
 site's alternative, a kube-vip or Cilium L2 VIP, needs Neutron
 allowed-address-pairs on the node ports, which also needs item 1 to set.
+
+**2026-10-14: Octavia works.** Test load balancer `midori-lbtest`:
+- VIP 10.30.30.71 on the project subnet `vpn_public_network` (10.30.30.0/24),
+  no floating IP, TCP 80 to NodePort 30310 on the three servers;
+- the amphora booted in about 75 s and all three members are ONLINE;
+- 5 of 5 requests answered.
+
+At first the members were all ERROR: the nodes had only the project's shared
+`default` security group, which does not admit the amphora, whose ports
+belong to Octavia's service project. Fixed with a dedicated group,
+`midori-nodeports` (686ee69e…): TCP 30000-32767 from 10.30.30.0/24, attached to
+the five midori nodes beside `default`. `default` is untouched, since other
+people's VMs in the project use it. 10.30.30.0/24 includes those VMs, but a
+tighter source would need the amphora's address, which only Octavia admins
+see.
+
+Floating IPs come from `external-net`, 119.15.113.0/24: part of Midokura
+Japan's 119.15.112.0/20 (APNIC), announced by AS55393 and seen by 325 of 326
+RIPE RIS peers, so globally routable. The TYO router's last firewall rule
+drops all traffic from the internet to that range, and only the office and VPN
+ranges and an operators list are let in before it. The site team will open
+other source ranges.
+
+Next: the openstack-cloud-controller-manager (Service controller only) for
+`type: LoadBalancer`, with load balancers allowed per tenant by the admin.
+Floating IPs per Service, opt-in.
 
 ## 3. No block storage for pods (Cinder CSI)
 
