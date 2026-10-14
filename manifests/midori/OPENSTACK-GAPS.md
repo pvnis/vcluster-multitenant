@@ -21,6 +21,17 @@ settings (allowed-address-pairs) that a self-managed VIP would need.
 **Ask.** An application credential scoped to the midori project, with roles
 for Octavia load balancers and Cinder volumes.
 
+**2026-10-14: partly provided.** An application credential `octavia-api-key`
+(project 083326ef…, role `load-balancer_member` only) authenticates and its
+catalog lists Octavia at :9876. But Octavia refuses every call, even listing
+the project's own load balancers or providers: `403 Policy does not allow this
+request`. That is consistent with a deployment on the new default policies,
+which also require the Keystone `member` role. Neutron with this token shows
+only the two shared networks (management-net, external-net), and none of the
+project's networks, ports, routers or floating IPs. Nova listing is 403. Kept
+on midori-cp-0 at `~/midori-build/octavia-appcred` (mode 600), never in git.
+Still needed: the same credential with `member` as well.
+
 ## 2. No load balancer (Octavia)
 
 **Missing.** Without item 1, Octavia cannot be used.
