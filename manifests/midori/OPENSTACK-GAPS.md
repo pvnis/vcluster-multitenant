@@ -78,9 +78,12 @@ drops all traffic from the internet to that range, and only the office and VPN
 ranges and an operators list are let in before it. The site team will open
 other source ranges.
 
-Next: the openstack-cloud-controller-manager (Service controller only) for
-`type: LoadBalancer`, with load balancers allowed per tenant by the admin.
-Floating IPs per Service, opt-in.
+Since then (2026-10-14):
+- `type: LoadBalancer` Services get Octavia load balancers through the
+  openstack-cloud-controller-manager. Each tenant is allowed a number of them
+  by the admin; floating IPs are opt-in per Service (`occm/README.md`).
+- The Kubernetes API has one address, 10.30.30.106:6443 (`k8s-api-lb.md`).
+- `midori-lbtest` was deleted.
 
 ## 3. No block storage for pods (Cinder CSI)
 
