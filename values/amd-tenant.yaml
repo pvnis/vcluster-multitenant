@@ -1,33 +1,28 @@
-# Overlay for tenants that need to schedule AMD GPU workloads onto sens1.
-# Applied after tenant.yaml, before the per-tenant port overlay:
+# Overlay for tenants that schedule AMD GPU workloads onto a gpu.vendor=amd
+# node (midori-amd-0). The mirror of nv-tenant.yaml, one node label different.
+#
+# The midori tenant controller does NOT merge this file: it sets the same node
+# sync from the Tenant's spec.gpuVendor (templates.ts vclusterValues), so a
+# tenant created with gpuVendor: amd gets exactly this. The file is kept for
+# the vcluster-CLI path and as the documented reasoning.
+#
+# Why real node sync: tenant.yaml's default fakes nodes, which carry neither a
+# real gpu.vendor label nor a real amd.com/gpu-vram-mib allocatable, so a GPU
+# pod's own scheduler (inside the vCluster) can never place it and the syncer
+# never gets a pod to create on the host. Syncing the real node fixes both.
+#
+# The selector keeps exposure to exactly the AMD node(s): the tenant learns
+# their name, labels and current allocatable, and nothing about other nodes or
+# other tenants.
+#
 #   vcluster create tenant-amd-a -n tenant-amd-a \
 #     --values tenant.yaml --values amd-tenant.yaml --values tenant-amd-a.yaml
 #
-# tenant.yaml leaves nodes faked (sync.fromHost.nodes.enabled: false)
-# specifically so a tenant cannot see another tenant's node conditions. A GPU
-# workload needs the opposite: its own scheduler has to see sens1's real
-# amd.com/gpu-vram-mib allocatable and gpu.vendor=amd label, or every pod it
-# creates stays unschedulable inside the tenant's own view and the syncer never
-# gets a pod to create on the host at all. Fake nodes carry neither — measured,
-# a fake "sensai" node here has no GPU resource in .status.allocatable and no
-# gpu.vendor label, only a fixed generic capacity vcluster invents.
-#
-# The selector is what keeps this narrow. It syncs only nodes labelled
-# gpu.vendor=amd, which today is exactly sens1 — one real node, not the whole
-# host cluster's topology. A tenant given this overlay learns that one node's
-# real name, labels and current allocatable (including what other tenants have
-# already claimed there); it still cannot see sensai or any other tenant's
-# node conditions, and still cannot create, change or delete node objects,
-# since sync.fromHost is one-way.
-#
-# This does not, by itself, stop two tenants from racing to schedule on the
-# same resource. Each tenant's scheduler decides against its own synced view of
-# sens1, and that view is not updated by another tenant's claims until the
-# syncer's periodic resync catches up. The hard stop is the host's kubelet,
-# which admits a synced pod against the *real* current allocatable regardless
-# of which tenant asked — an over-optimistic placement fails or sticks Pending
-# there, visible back in the tenant as the same. The AMD device plugin's own
-# accounting is the source of truth in both cases; nothing here can widen it.
+# Cross-node Cilium note (TWO-VENDOR-CLUSTER.md): on midori a tenant control
+# plane may land on any node, so admin kubectl traffic to it can cross the
+# overlay and arrive as the reserved identity remote-node, which no ipBlock
+# rule matches. tenant-cnp-amd.yaml's fromEntities: [remote-node] rule handles
+# that; apply it when the control plane is not co-located with the client.
 sync:
   fromHost:
     nodes:

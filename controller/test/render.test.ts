@@ -168,6 +168,13 @@ test('model consumer: the broker Service is replicated in beside the S3 gateway'
   assert.deepEqual(plain.networking.replicateServices.fromHost, [{ from: 's3-gateway/s3-gateway', to: 's3-gateway/s3-gateway' }]);
 });
 
+test('gpuVendor scopes node sync: nvidia by default, amd when set', () => {
+  const nv = T.vclusterValues(tenant('tenant-x', {}), 31000) as any;
+  assert.deepEqual(nv.sync.fromHost.nodes, { enabled: true, selector: { labels: { 'gpu.vendor': 'nvidia' } } });
+  const amd = T.vclusterValues(tenant('tenant-amd', { gpuVendor: 'amd' }), 31000) as any;
+  assert.deepEqual(amd.sync.fromHost.nodes, { enabled: true, selector: { labels: { 'gpu.vendor': 'amd' } } });
+});
+
 test('sandboxes: every per-tenant allow excludes them; their own policy is default-deny both ways', () => {
   const r = T.render(tenant('tenant-x', { network: { internet: true }, modelProviders: ['tenant-ps'] }));
   const allows = [...r.present.Network, ...r.present.Models].filter((o: any) =>

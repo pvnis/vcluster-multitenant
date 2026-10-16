@@ -30,6 +30,8 @@ export function parseSpec(input: any): TenantSpec {
     management: input?.management === 'Observe' ? 'Observe' : 'Manage',
     quota: { gpus: int(q.gpus, 'GPU attachments', 0, 40), gpuMemoryMiB: int(q.gpuMemoryMiB, 'GPU memory (MiB)', 0, 4 * GPU_MIB) },
     network: { internet: !!input?.network?.internet },
+    // Not in the form: set with kubectl, kept on edit (carryOver).
+    gpuVendor: input?.gpuVendor === 'amd' ? 'amd' : 'nvidia',
     controlPlane: { size: input?.controlPlane?.size === 'large' ? 'large' : 'small' },
     s3: { enabled: input?.s3?.enabled !== false },
     gateway: { expose: !!input?.gateway?.expose },
@@ -70,6 +72,7 @@ export function carryOver(existing: Partial<TenantSpec> | undefined, spec: Tenan
   if (existing?.modelProvider) spec.modelProvider = existing.modelProvider;
   if (existing?.modelProviders) spec.modelProviders = existing.modelProviders;
   if (existing?.loadBalancers) spec.loadBalancers = existing.loadBalancers;
+  if (existing?.gpuVendor) spec.gpuVendor = existing.gpuVendor;
   return spec;
 }
 
@@ -87,6 +90,7 @@ export function specPatch(spec: TenantSpec): object {
         pods: q.pods ?? null, persistentVolumeClaims: q.persistentVolumeClaims ?? null,
       },
       controlPlane: { size: spec.controlPlane.size, apiNodePort: spec.controlPlane.apiNodePort ?? null },
+      gpuVendor: spec.gpuVendor,
     },
   };
 }

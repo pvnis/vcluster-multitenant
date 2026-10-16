@@ -138,7 +138,17 @@ export class Templates {
       parse(this.raw('vcluster-nv-tenant.yaml')),
       parse(this.raw('vcluster-midori-tenant.yaml')),
       overlay,
-    ) as { networking?: { replicateServices?: { fromHost?: Array<{ from: string; to: string }> } } };
+    ) as {
+      networking?: { replicateServices?: { fromHost?: Array<{ from: string; to: string }> } };
+      sync?: { fromHost?: { nodes?: unknown } };
+    };
+    // Node sync scoped to this tenant's GPU vendor: its scheduler sees only
+    // host nodes labelled gpu.vendor=<vendor> (and nothing about other tenants
+    // or control-plane nodes). Overrides vcluster-nv-tenant.yaml's nvidia default.
+    ((values.sync ??= {}).fromHost ??= {}).nodes = {
+      enabled: true,
+      selector: { labels: { 'gpu.vendor': t.spec.gpuVendor } },
+    };
     // Each model provider's broker, under the same name inside the vCluster
     // (model-consumer.yaml). Appended: a merge would replace the S3 entry.
     const providers = t.spec.modelProviders.filter((p) => p !== t.metadata!.name);

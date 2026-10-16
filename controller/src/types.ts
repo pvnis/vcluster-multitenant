@@ -31,6 +31,10 @@ export interface TenantSpec {
     persistentVolumeClaims?: number;
   };
   network: { internet: boolean };
+  // Which GPU node type this tenant schedules onto: its vCluster syncs host
+  // nodes labelled gpu.vendor=<this>. One vendor per tenant (TWO-VENDOR-CLUSTER.md
+  // keeps tenant-nv-* and tenant-amd-* separate). Default nvidia.
+  gpuVendor: 'nvidia' | 'amd';
   controlPlane: { apiNodePort?: number; size: 'small' | 'large' };
   s3: { enabled: boolean };
   gateway: { expose: boolean };
@@ -98,6 +102,7 @@ export function withDefaults(t: Tenant): Tenant {
       management: s.management ?? 'Observe',
       quota: { gpus: 0, gpuMemoryMiB: 0, ...(s.quota ?? {}) },
       network: { internet: s.network?.internet ?? false },
+      gpuVendor: s.gpuVendor === 'amd' ? 'amd' : 'nvidia',
       controlPlane: { size: s.controlPlane?.size ?? 'small', apiNodePort: s.controlPlane?.apiNodePort },
       s3: { enabled: s.s3?.enabled ?? true },
       gateway: { expose: s.gateway?.expose ?? false },

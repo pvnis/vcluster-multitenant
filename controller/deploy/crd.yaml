@@ -144,6 +144,9 @@ spec:
                 default: []
                 maxItems: 8
                 items: { type: string, pattern: '^tenant-[a-z0-9]([-a-z0-9]*[a-z0-9])?$', maxLength: 32 }
+              # GPU node type this tenant schedules onto (its vCluster syncs
+              # host nodes labelled gpu.vendor=<this>). One vendor per tenant.
+              gpuVendor: { type: string, enum: [nvidia, amd], default: nvidia }
           status:
             type: object
             x-kubernetes-preserve-unknown-fields: true
