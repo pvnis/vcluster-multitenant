@@ -90,6 +90,11 @@ export class Templates {
       set('persistentvolumeclaims', q.persistentVolumeClaims);
       // GPU time is unlimited unless the Tenant sets it (no template default).
       set('requests.nvidia.com/gpucores', q.gpuCores);
+      // AMD GPU VRAM: one unit of amd.com/gpu-vram-mib is 512 MiB, so the MiB
+      // figure is floored to whole units. The AMD device plugin advertises
+      // this extended resource, so ResourceQuota counts requests natively (no
+      // webhook total-resource needed, unlike NVIDIA). Unset = not limited.
+      if (q.amdGpuVramMiB !== undefined) rq.spec.hard['requests.amd.com/gpu-vram-mib'] = String(Math.floor(q.amdGpuVramMiB / 512));
       // Each one is an amphora VM in the shared OpenStack project: none unless
       // the Tenant asks.
       rq.spec.hard['services.loadbalancers'] = String(s.loadBalancers.count);

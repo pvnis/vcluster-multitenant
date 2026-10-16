@@ -44,6 +44,7 @@ export function parseSpec(input: any): TenantSpec {
   if (cpu.requests || cpu.limits) spec.quota.cpu = Object.fromEntries(Object.entries(cpu).filter(([, v]) => v));
   if (memory.requests || memory.limits) spec.quota.memory = Object.fromEntries(Object.entries(memory).filter(([, v]) => v));
   if (q.gpuCores !== undefined && q.gpuCores !== '' && q.gpuCores !== null) spec.quota.gpuCores = int(q.gpuCores, 'GPU time', 0, 400);
+  if (q.amdGpuVramMiB !== undefined && q.amdGpuVramMiB !== '' && q.amdGpuVramMiB !== null) spec.quota.amdGpuVramMiB = int(q.amdGpuVramMiB, 'AMD GPU memory (MiB)', 0, 32768);
   if (q.pods !== undefined && q.pods !== '' && q.pods !== null) spec.quota.pods = int(q.pods, 'Pods', 1, 1000);
   if (q.persistentVolumeClaims !== undefined && q.persistentVolumeClaims !== '' && q.persistentVolumeClaims !== null) {
     spec.quota.persistentVolumeClaims = int(q.persistentVolumeClaims, 'PVCs', 0, 1000);
@@ -81,6 +82,7 @@ export function specPatch(spec: TenantSpec): object {
       ...spec,
       quota: {
         gpus: q.gpus, gpuMemoryMiB: q.gpuMemoryMiB, gpuCores: q.gpuCores ?? null,
+        amdGpuVramMiB: q.amdGpuVramMiB ?? null,
         cpu: q.cpu ?? null, memory: q.memory ?? null,
         pods: q.pods ?? null, persistentVolumeClaims: q.persistentVolumeClaims ?? null,
       },

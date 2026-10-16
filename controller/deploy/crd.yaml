@@ -63,6 +63,10 @@ spec:
                   # Optional: GPU time, summed over pods' nvidia.com/gpucores
                   # (100 = one whole card's time). Unset = not limited.
                   gpuCores: { type: integer, minimum: 0, maximum: 400 }
+                  # Optional: AMD GPU memory, MiB, summed over pods'
+                  # amd.com/gpu-vram-mib (one unit = 512 MiB; floored to units).
+                  # Unset = not limited. 32768 ~= the R9700's advertised VRAM.
+                  amdGpuVramMiB: { type: integer, minimum: 0, maximum: 32768 }
                   # Optional. Unset keeps manifests/midori/tenant-quota.yaml's
                   # value. A quota caps a tenant; it reserves nothing, and
                   # limits above node capacity are overcommit.

@@ -7,7 +7,9 @@
     driver      in-tree amdgpu + AMD's firmware (amdgpu-dkms-firmware, ROCm 7.2.4 repo)
     k3s         agent v1.36.5+k3s1, joined through the API load balancer 10.30.30.106
     label/taint gpu.vendor=amd, and gpu.vendor=amd:NoSchedule
-    runsc       e6a06cbce (as the NVIDIA nodes), systrap, no amdproxy (below)
+    runsc       operator build 71a5612d7, systrap, amdproxy=true (below);
+                prior e6a06cbce kept as /usr/local/bin/runsc.e6a06cbce for rollback
+    driver-mod  operator-modified amdgpu (DKMS) so ROCm works under systrap (below)
 
 Joined 2026-10-16. Verified on it:
 - `rocminfo` lists gfx1201 with 64 CUs; KFD reports gfx_target_version 120001;
@@ -44,32 +46,40 @@ Joined 2026-10-16. Verified on it:
   gfx12 firmware, which AMD's `amdgpu-dkms-firmware` puts in
   `/lib/firmware/updates/amdgpu`.
 
-## Blocked: AMD GPU pods under gVisor need nested virtualization
+## AMD GPU pods under gVisor on systrap (resolved by the operator)
 
-ROCm under gVisor (amdproxy) needs `--platform=kvm`. On systrap, KFD binds each
-mapping to the process that owns the KFD context, but systrap maps from a stub
-process, so `mmap` of `/dev/kfd` fails with `EINVAL` (gvisor fork, commit
-87e2dfe49, "KFD mappings are impossible on the systrap platform").
+This VM has no `/dev/kvm` (the guest CPU is exposed without `svm`), so the
+`--platform=kvm` path amdproxy originally needed was not available. Rather than
+wait on nested virtualization, the operator made ROCm work under gVisor on the
+default **systrap** platform, with an operator-provided modified `amdgpu`
+driver and a matching gVisor (`runsc`) build on midori-amd-0. That work lives
+outside this repo; its author (the midori-amd-0 session / the operator) owns
+it. Verified end to end: an HSA queue retires packets through its doorbell and
+ROCr kernels fill and read back VRAM on the R9700 (gfx1201) under systrap.
 
-This VM has no `/dev/kvm`: the guest CPU (EPYC-Genoa model) is exposed without
-`svm`. So the node runs CPU sandboxes only, and `runsc-config.toml` leaves
-amdproxy off; with it on, every AMD sandbox would fail.
+What this repo adds:
 
-**Ask (site admins, hypervisor gpu1):**
-- nested virtualization for AMD: `kvm_amd nested=1`;
-- a guest CPU with `svm`: libvirt `cpu_mode = host-passthrough`, or
-  `cpu_model_extra_flags = svm` for the EPYC-Genoa model;
-- then a hard reboot of midori-amd-0.
+- **`device-plugin.yaml`** — the AMD device plugin. The node advertises
+  `amd.com/gpu-vram-mib: 63` (63 x 512 MiB of 32624 MiB).
+- **Per-pod limit** — the gVisor quota webhook (`../gvisor-webhook.yaml`,
+  already deployed) injects `dev.gvisor.flag.amdproxy-gpu-memory-limit` from a
+  pod's `amd.com/gpu-vram-mib` request, in namespaces labelled `gvisor` (every
+  tenant namespace). Verified by dry-run: a 4-unit request annotated 2048 MiB.
+- **Per-tenant cap** — `quota.amdGpuVramMiB` in the Tenant spec renders
+  `requests.amd.com/gpu-vram-mib` (one unit = 512 MiB; floored to units).
 
-PCI passthrough and nested virtualization work together.
+Still open:
 
-When `/dev/kvm` appears:
-- runsc `platform = "kvm"` and `amdproxy = "true"`, with the node's VRAM and CU
-  mask as ceilings (as `../../twovendor/sens1-runsc-config.toml`);
-- an AMD device plugin and the quota webhook's AMD resources, per
-  `../../../TWO-VENDOR-CLUSTER.md`;
-- tenant quotas for AMD memory in the controller;
-- lift the taint.
+- The `gpu.vendor=amd:NoSchedule` taint stays until AMD tenancy is opened; an
+  AMD GPU pod needs `runtimeClassName: gvisor`, a toleration for it, and an
+  `amd.com/gpu-vram-mib` request.
+- No `amd-tenant.yaml` values overlay yet (real node sync scoped to
+  `gpu.vendor=amd`, per `../../../TWO-VENDOR-CLUSTER.md`), so tenants cannot
+  schedule onto this node through their own vCluster until that exists.
 
-Kernel 7.0 is newer than anything amdproxy was tested on (the Navi 32 work was
-on 6.x), so that part needs testing.
+The device plugin runs **privileged** (KFD hides a GPU's topology from a
+container whose device cgroup excludes its render node); see `device-plugin.yaml`.
+
+Kernel 7.0 and RDNA4 are newer than anything the earlier Navi 32 amdproxy work
+(on 6.x) was tested against, so treat AMD GPU workloads here as freshly proven,
+not long-soaked.

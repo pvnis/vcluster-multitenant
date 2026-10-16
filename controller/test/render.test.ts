@@ -109,6 +109,15 @@ test('quota: gpuCores becomes requests.nvidia.com/gpucores, absent when unset', 
   assert.ok(!('requests.nvidia.com/gpucores' in hardOf({ quota: { gpus: 1, gpuMemoryMiB: 1 } })));
 });
 
+test('quota: amdGpuVramMiB becomes requests.amd.com/gpu-vram-mib in 512-MiB units, absent when unset', () => {
+  const hardOf = (spec: Record<string, unknown>) => (T.render(tenant('tenant-q', spec)).present.Quota.find((o) => o.kind === 'ResourceQuota') as any).spec.hard;
+  // 2048 MiB / 512 = 4 units
+  assert.equal(hardOf({ quota: { gpus: 0, gpuMemoryMiB: 0, amdGpuVramMiB: 2048 } })['requests.amd.com/gpu-vram-mib'], '4');
+  // floored to whole units: 1500 MiB -> 2 units
+  assert.equal(hardOf({ quota: { gpus: 0, gpuMemoryMiB: 0, amdGpuVramMiB: 1500 } })['requests.amd.com/gpu-vram-mib'], '2');
+  assert.ok(!('requests.amd.com/gpu-vram-mib' in hardOf({ quota: { gpus: 1, gpuMemoryMiB: 1 } })));
+});
+
 
 test('model provider: the broker and its Gateway allow; disabled leaves the shared namespace', () => {
   const on = T.render(tenant('tenant-ps', { modelProvider: { enabled: true } }));

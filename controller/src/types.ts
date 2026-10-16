@@ -20,6 +20,9 @@ export interface TenantSpec {
     gpus: number;          // GPU attachments (sum of nvidia.com/gpu), not cards
     gpuMemoryMiB: number;
     gpuCores?: number;     // optional: sum of nvidia.com/gpucores (100 = one card's time)
+    // optional: sum of amd.com/gpu-vram-mib, in MiB (one unit = 512 MiB;
+    // floored to units when rendered). Unset = not limited.
+    amdGpuVramMiB?: number;
     // Optional; unset keeps the value in manifests/midori/tenant-quota.yaml.
     // Kubernetes quantities ("20", "96Gi").
     cpu?: { requests?: string; limits?: string };
