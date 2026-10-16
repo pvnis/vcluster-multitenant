@@ -1,0 +1,14 @@
+# /etc/rancher/k3s/config.yaml on midori-amd-0 (10.30.30.160), a k3s agent.
+# The token is passed separately (K3S_TOKEN), never written here.
+server: https://10.30.30.106:6443     # the API load balancer (../k8s-api-lb.md)
+node-ip: 10.30.30.160
+resolv-conf: /etc/rancher/k3s/resolv.conf
+kubelet-arg:
+  - cpu-manager-policy=static
+  - reserved-cpus=0
+node-label:
+  - gpu.vendor=amd
+# Nothing lands here unless it asks for the AMD node. Lifted only when AMD GPU
+# pods can actually run (README.md).
+node-taint:
+  - gpu.vendor=amd:NoSchedule

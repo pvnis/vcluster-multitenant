@@ -1,0 +1,13 @@
+# /etc/runsc/config.toml on midori-amd-0: the ConfigPath of the runsc handler
+# (../containerd-10-runsc.toml). Decoded into pkg/shim/v1/runsc.Options: runsc
+# flags MUST sit under [runsc_config].
+#
+# No amdproxy yet. ROCm under gVisor needs --platform=kvm: on systrap, KFD binds
+# each mapping to the process that owns the KFD context while systrap maps from
+# a stub process, so mmap of /dev/kfd fails with EINVAL
+# (gvisor docs, commit 87e2dfe49). This VM has no /dev/kvm (README.md), so
+# amdproxy would only make every AMD sandbox fail. CPU sandboxes run as on the
+# other nodes, on systrap.
+log_level = "info"
+[runsc_config]
+  debug-log = "/var/log/runsc/%ID%/"

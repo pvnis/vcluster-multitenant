@@ -207,3 +207,16 @@ the project network that relies on the search list has the same stall.
 - **GPU passthrough** works: two A6000s per VM, with `NV4` NVLink between them.
   Host NUMA placement cannot be seen from the guest, and confirming the alias's
   `device_type` would need the Nova database.
+
+## 6. No nested virtualization on the AMD GPU node (2026-10-16)
+
+**Missing.** midori-amd-0 (flavor plump-gpu-r9700, hypervisor gpu1) has no
+`/dev/kvm`: its guest CPU is exposed without `svm`.
+
+**What it blocks.** Every AMD GPU workload under gVisor. amdproxy needs runsc's
+KVM platform, because KFD mappings are impossible on systrap. The node runs
+CPU sandboxes only (`amd/README.md`).
+
+**Ask.** `kvm_amd nested=1` on gpu1 and a guest CPU with `svm`
+(`cpu_mode = host-passthrough`, or `cpu_model_extra_flags = svm`), then a hard
+reboot of midori-amd-0.
