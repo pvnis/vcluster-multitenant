@@ -49,6 +49,15 @@ def per_pod_running(resource):
     return (f'sum by (namespace, pod) (max by (namespace, pod, container) (kube_pod_container_resource_limits{{resource="{resource}", namespace=~"tenant-.+"}}) '
             f'* on (namespace, pod) group_left () max by (namespace, pod) (kube_pod_status_phase{{phase="Running", namespace=~"tenant-.+"}} == 1))')
 
+# AMD GPU VRAM a pod HOLDS, per namespace: its amd.com/gpu-vram-mib request
+# (512-MiB units) x 512 MiB, running pods only. There is no AMD utilisation
+# exporter (no DCGM equivalent), so this is allocation, not physical use.
+AMD_UNIT_MIB = 512
+def amd_alloc(by):
+    lim = 'max by (namespace, pod, container) (kube_pod_container_resource_limits{resource="amd_com_gpu_vram_mib", namespace=~"tenant-.+"})'
+    return (f'sum by ({by}) ({lim} * {AMD_UNIT_MIB} '
+            f'* on (namespace, pod) group_left () max by (namespace, pod) (kube_pod_status_phase{{phase="Running", namespace=~"tenant-.+"}} == 1))')
+
 # Host pod name -> the tenant's own pod name, via kube-state-metrics.
 VPOD = ('* on (namespace, pod) group_left (vpod) '
         'label_replace(max by (namespace, pod, annotation_vcluster_loft_sh_object_name) '
@@ -242,6 +251,15 @@ def admin():
                   desc="What each tenant's running pods hold: slices (nvidia.com/gpumem x GPUs) plus whole cards at "
                        f"{CARD_MIB} MiB each. Deduplicated across kube-state-metrics restarts. Compare with physical "
                        "use (GPU memory used) above."))])
+    b.row("AMD GPU (midori-amd-0)")
+    b.add([(12, ts("AMD VRAM held, by tenant", [(amd_alloc("namespace"), "{{namespace}}")],
+                   unit="decmbytes", stack=True, legend_calc="last",
+                   desc="Each tenant's running pods' amd.com/gpu-vram-mib (512 MiB per unit). "
+                        "Allocation, not physical use: there is no AMD GPU utilisation exporter yet.")),
+           (12, ts("AMD VRAM capacity (node)", [(f'kube_node_status_capacity{{resource="amd_com_gpu_vram_mib"}} * {AMD_UNIT_MIB}', "{{node}}")],
+                   unit="decmbytes",
+                   desc="amd.com/gpu-vram-mib the device plugin advertises, x 512 MiB. The physical card is 32624 MiB; "
+                        "63 units x 512 = 32256 MiB are offered as slices."))])
     b.row("Tenants")
     b.add([(12, table("Quota use by tenant",
                       'max by (namespace, resource) (kube_resourcequota{type="used", namespace=~"tenant-.+"}) / on (namespace, resource) max by (namespace, resource) (kube_resourcequota{type="hard", namespace=~"tenant-.+"})',
