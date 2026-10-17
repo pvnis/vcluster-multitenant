@@ -89,8 +89,10 @@ test('GPU memory held: the UI and the admin Grafana panel use the same query', a
   const { HELD_BY_TENANT } = await import('../src/ui/promql.ts');
   const { readFileSync } = await import('node:fs');
   const dash = JSON.parse(readFileSync('../manifests/midori/observability/dashboards/admin-midori.json', 'utf8'));
-  const panel = dash.panels.find((p: any) => p.title === 'GPU memory held, by tenant');
-  assert.equal(panel.targets[0].expr, HELD_BY_TENANT);
+  const nv = dash.panels.find((p: any) => p.title === 'GPU memory held, by tenant');
+  const amd = dash.panels.find((p: any) => p.title === 'AMD VRAM held, by tenant');
+  // The UI held query is the NVIDIA and AMD Grafana held panels unioned; keep all in step.
+  assert.equal(HELD_BY_TENANT, `(${nv.targets[0].expr}) or (${amd.targets[0].expr})`);
 });
 
 test('a UI edit keeps model sharing, which the form does not show', () => {

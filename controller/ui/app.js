@@ -263,12 +263,24 @@ function miniQuota(line, kind, unit = '', held) {
     bar(used, undefined, hard));
 }
 
+// GPU memory cell: NVIDIA (midori.phoenix/gpu-memory, MiB) or, for an AMD
+// tenant, amd.com/gpu-vram-mib converted from 512-MiB units. Held comes from
+// Prometheus (HELD_BY_TENANT covers both vendors).
+function gpuMemCell(t) {
+  const held = data.gpuMemory?.available ? (data.gpuMemory.heldByTenant[t.name] ?? 0) : undefined;
+  const nv = t.quota['requests.midori.phoenix/gpu-memory'];
+  if (nv) return miniQuota(nv, 'mib', '', held);
+  const amd = t.quota['requests.amd.com/gpu-vram-mib'];
+  if (amd) return miniQuota({ hard: String(qty(amd.hard) * 512), used: String(qty(amd.used) * 512) }, 'mib', '', held);
+  return miniQuota(undefined);
+}
+
 function renderTenants() {
   const rows = data.tenants.map((t) => h('tr', { onclick: () => openDetail(t.name), tabindex: 0, title: `Open ${t.name}`, 'aria-label': `Open ${t.name}`, onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(t.name); } } },
     h('td', {}, h('div', { class: 'name' }, swatch(t.name), t.name), h('small', { class: 'muted', text: t.spec.controlPlane.size === 'large' ? 'large control plane' : '' })),
     h('td', {}, h('div', { class: 'chips' }, statusChips(t))),
     h('td', {}, miniQuota(t.quota['requests.nvidia.com/gpu'], 'count', ' GPUs')),
-    h('td', {}, miniQuota(t.quota['requests.midori.phoenix/gpu-memory'], 'mib', '', data.gpuMemory?.available ? (data.gpuMemory.heldByTenant[t.name] ?? 0) : undefined)),
+    h('td', {}, gpuMemCell(t)),
     h('td', {}, miniQuota(t.quota['requests.cpu'], 'cpu', ' cores')),
     h('td', {}, miniQuota(t.quota['requests.memory'], 'memory')),
     h('td', {}, h('span', { class: `chip ${t.spec.network.internet ? 'info' : ''}`, text: t.spec.network.internet ? 'internet' : 'isolated' })),

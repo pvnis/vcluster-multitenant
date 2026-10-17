@@ -4,8 +4,10 @@
 // with the webhook's --nvidia-whole-card-mib off) declare none and are
 // counted at a full card here.
 //
-// HELD, per tenant namespace: each running pod's nvidia.com/gpumem x its GPUs
-// for a slice, or a card's full memory per GPU for a whole-card pod;
+// HELD, per tenant namespace, in MiB. NVIDIA: each running pod's
+// nvidia.com/gpumem x its GPUs for a slice, or a card's full memory per GPU for
+// a whole-card pod. AMD: amd.com/gpu-vram-mib x 512. A tenant is single-vendor,
+// so a namespace reports one or the other.
 // max-by-labels first so duplicate kube-state-metrics series (during its
 // restarts) cannot double-count. The same rule as the admin Grafana panel
 // "GPU memory held" (manifests/midori/observability/dashboards/build.py,
@@ -15,11 +17,18 @@
 const PROMETHEUS = process.env.PROMETHEUS_URL ?? 'http://kps-kube-prometheus-stack-prometheus.observability.svc:9090';
 export const CARD_MIB = Number(process.env.GPU_CARD_MIB ?? 46068); // RTX A6000
 
+// AMD VRAM is a single resource, amd.com/gpu-vram-mib, in 512-MiB units.
+export const AMD_UNIT_MIB = 512;
+
 const lim = (r: string) => `max by (namespace, pod, container) (kube_pod_container_resource_limits{resource="${r}", namespace=~"tenant-.+"})`;
-export const HELD_BY_TENANT =
+const RUN = ` * on (namespace, pod) group_left () max by (namespace, pod) (kube_pod_status_phase{phase="Running", namespace=~"tenant-.+"} == 1)`;
+const NV_HELD =
   `sum by (namespace) (((${lim('nvidia_com_gpumem')} * on (namespace, pod, container) ${lim('nvidia_com_gpu')}) ` +
-  `or on (namespace, pod, container) ${lim('nvidia_com_gpu')} * ${CARD_MIB}) ` +
-  `* on (namespace, pod) group_left () max by (namespace, pod) (kube_pod_status_phase{phase="Running", namespace=~"tenant-.+"} == 1))`;
+  `or on (namespace, pod, container) ${lim('nvidia_com_gpu')} * ${CARD_MIB})${RUN})`;
+const AMD_HELD = `sum by (namespace) (${lim('amd_com_gpu_vram_mib')} * ${AMD_UNIT_MIB}${RUN})`;
+// A tenant is single-vendor (gpuVendor), so the two namespace sets are
+// disjoint and `or` unions them: each tenant namespace shows its own VRAM.
+export const HELD_BY_TENANT = `(${NV_HELD}) or (${AMD_HELD})`;
 export const USED_TOTAL = 'sum(max by (hostname, gpu) (DCGM_FI_DEV_FB_USED))';
 
 async function query(expr: string): Promise<Array<{ metric: Record<string, string>; value: [number, string] }>> {
