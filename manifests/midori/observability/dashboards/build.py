@@ -252,10 +252,17 @@ def admin():
                        f"{CARD_MIB} MiB each. Deduplicated across kube-state-metrics restarts. Compare with physical "
                        "use (GPU memory used) above."))])
     b.row("AMD GPU (midori-amd-0)")
+    # Physical use, from AMD's device-metrics-exporter (amd-smi). Metrics are
+    # per card (labels hostname, gpu_id); VRAM is in MB.
+    b.add([(8, ts("AMD VRAM used", [('gpu_used_vram', "{{hostname}} gpu{{gpu_id}}")], unit="decmbytes",
+                  desc="Physical VRAM in use on the card (device-metrics-exporter). Compare with 'held' below.")),
+           (8, ts("AMD GPU utilisation", [('gpu_gfx_activity', "{{hostname}} gpu{{gpu_id}}")], unit="percent",
+                  desc="Graphics-engine activity (gpu_gfx_activity).")),
+           (8, ts("AMD GPU power", [('gpu_average_package_power', "{{hostname}} gpu{{gpu_id}}")], unit="watt"))])
     b.add([(12, ts("AMD VRAM held, by tenant", [(amd_alloc("namespace"), "{{namespace}}")],
                    unit="decmbytes", stack=True, legend_calc="last",
                    desc="Each tenant's running pods' amd.com/gpu-vram-mib (512 MiB per unit). "
-                        "Allocation, not physical use: there is no AMD GPU utilisation exporter yet.")),
+                        "Allocation; compare with 'AMD VRAM used' (physical) above.")),
            (12, ts("AMD VRAM capacity (node)", [(f'kube_node_status_capacity{{resource="amd_com_gpu_vram_mib"}} * {AMD_UNIT_MIB}', "{{node}}")],
                    unit="decmbytes",
                    desc="amd.com/gpu-vram-mib the device plugin advertises, x 512 MiB. The physical card is 32624 MiB; "
