@@ -69,7 +69,19 @@ From `manifests/midori/observability/`, host kubeconfig:
 8. Per tenant `tenant-prom-proxy.yaml`.
 9. Secret `grafana-admin`, `grafana-values.yaml` (grafana 10.5.15), the admin
    dashboard ConfigMap (`dashboards/admin-midori.json`, label
-   `grafana_dashboard`), then
+   `grafana_dashboard=1` AND annotation `grafana_folder=midori` — the sidecar
+   files by that annotation (`folderAnnotation: grafana_folder`); drop it and
+   the dashboard moves to the General folder). To refresh it after editing
+   `build.py`, keep both:
+
+       kubectl -n observability create configmap dashboard-midori-admin \
+         --from-file=admin-midori.json=dashboards/admin-midori.json \
+         --dry-run=client -o yaml \
+         | kubectl label --local -f - grafana_dashboard=1 -o yaml --dry-run=client \
+         | kubectl annotate --local -f - grafana_folder=midori -o yaml --dry-run=client \
+         | kubectl apply -f -
+
+   then
    `python3 grafana-tenants.py http://10.30.30.204:30300 ~/midori-build/grafana-admin ~/midori-build/grafana-users <tenants…>`.
    Idempotent; run it again for a new tenant, and add the tenant to the admin
    Loki header in `grafana-values.yaml`.
