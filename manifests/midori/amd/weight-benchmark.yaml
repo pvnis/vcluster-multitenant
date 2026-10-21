@@ -1,0 +1,62 @@
+# AMD GPU weight-enforcement experiment: two pods sharing midori-amd-0's one
+# GPU, with different amd.com/gpu-vram-mib requests. On this model the gVisor
+# quota webhook derives the amdproxy time-slice weight from the VRAM request
+# (InjectAMDWeight), so a pod asking for more VRAM also gets proportionally
+# more GPU time under contention. amdproxy time-slices from the Sentry, so no
+# broker is needed; the per-sandbox limit and weight are enforced in-Sentry.
+#
+# heavy = 20 units, light = 10 units -> weights 20 and 10 (2:1). Total 30 units
+# (15360 MiB) fits tenant-amdshare's 32-unit quota.
+#
+# Run INSIDE the tenant vCluster so the webhook fires (tenant namespaces are
+# gvisor-labelled) and the quota counts the requests:
+#   kubectl -n tenant-system get secret tenant-amdshare-kubeconfig \
+#     -o jsonpath='{.data.config}' | base64 -d > amdshare.kc
+#   KUBECONFIG=amdshare.kc kubectl apply -f weight-benchmark.yaml
+#
+# IMAGE: a SUSTAINED-load GPU benchmark that loops a kernel and prints a
+# throughput counter (iterations/sec or GFLOP/s) every few seconds. The
+# amdtest-hsaqueue image is one-shot and will NOT work here; use the operator's
+# looping benchmark (e.g. a vecadd/rocBLAS loop with a rate counter). Replace
+# BENCH_IMAGE below and the --duration/arg to taste.
+#
+# Measure three ways and give the numbers to the analysis:
+#   1. heavy alone, 2. light alone, 3. both together.
+# Weight is enforced if, under contention, heavy:light throughput ~= 20:10.
+# Each pod's HSA view should also show only its own VRAM slice (isolation).
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bench-heavy
+  namespace: default           # replaced by the tenant vCluster's own default ns
+  labels: { app: amd-bench, weight: "20" }
+spec:
+  runtimeClassName: gvisor
+  restartPolicy: Never
+  nodeSelector: { gpu.vendor: amd }
+  tolerations: [{ key: gpu.vendor, operator: Equal, value: amd, effect: NoSchedule }]
+  containers:
+    - name: bench
+      image: registry.midori/gpuloop:c322c2daf46f
+      args: ["--mode", "fma"]   # compute-bound (FMA), the probe for time-slice weight
+      resources:
+        limits: { amd.com/gpu-vram-mib: "20", cpu: "2", memory: 2Gi }
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bench-light
+  namespace: default
+  labels: { app: amd-bench, weight: "10" }
+spec:
+  runtimeClassName: gvisor
+  restartPolicy: Never
+  nodeSelector: { gpu.vendor: amd }
+  tolerations: [{ key: gpu.vendor, operator: Equal, value: amd, effect: NoSchedule }]
+  containers:
+    - name: bench
+      image: registry.midori/gpuloop:c322c2daf46f
+      args: ["--mode", "fma"]   # compute-bound (FMA), the probe for time-slice weight
+      resources:
+        limits: { amd.com/gpu-vram-mib: "10", cpu: "2", memory: 2Gi }
