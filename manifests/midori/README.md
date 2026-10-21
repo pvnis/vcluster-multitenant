@@ -359,6 +359,33 @@ kubectl -n kube-system get cm hami-scheduler -o json \
 kubectl -n kube-system rollout restart deploy/hami-scheduler
 ```
 
+### NVLink topology scores (for multi-GPU placement)
+
+The device plugin computes a per-pair NVLink score only when
+`ENABLE_TOPOLOGY_SCORE=true`; with it unset (the chart default) it never writes
+the `hami.io/node-nvidia-score` annotation, and the scheduler places multi-GPU
+pods blind to the bridge. (The `devicepairscore` field inside
+`hami.io/node-nvidia-register` is an unused zero-value — the real data is the
+separate `node-nvidia-score` annotation.) Turn it on:
+
+```bash
+kubectl -n kube-system set env ds/hami-device-plugin -c device-plugin ENABLE_TOPOLOGY_SCORE=true
+```
+
+Each node then annotates `hami.io/node-nvidia-score` with the pairwise score;
+the A6000 pair reads **430** = 400 (NV4, four active NVLink links x 100) + 30
+(PCIe host bridge). A link counts toward the 400 only while its state is
+`FEATURE_ENABLED`, so a nonzero NVLink term also proves the bridge is up.
+
+The score is published but **inert** until the scheduler runs the
+`topology-aware` policy (`--gpu-scheduler-policy=topology-aware` on
+`hami-scheduler`, or per-pod annotation `hami.io/gpu-scheduler-policy:
+topology-aware`); left off, placement is unchanged. On a 2-GPU node a 2-GPU pod
+already gets both cards (the bridge) regardless, so the policy only starts to
+matter once a node has more than one bridged pair, or for fractional multi-GPU
+packing. Like the ConfigMap patch above, `helm upgrade` undoes this env; reapply
+it.
+
 ## Step 7 — storage, and model weights without RWX
 
 tyo's Ceph provides **block and object, not file**: there are keyrings for
