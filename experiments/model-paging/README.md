@@ -141,6 +141,10 @@ thereafter level-1 wake is a weight DMA from CPU RAM.
 - cross-node placement/migration (the multi-node half of the cost model);
   master demotion across tiers; prefetch;
 - per-tenant reserved floors wired to the controller's quota;
-- integration into the gVisor broker as the residency manager;
+- integration into the gVisor broker as the residency manager — **Go port
+  started** in the fork at `pkg/gpusched/residency/` (Manager + LRU/CostAware/
+  FrequencyCost + atomic admit + fairness/floors, Go tests mirroring these, a
+  BUILD file, and `INTEGRATION.md` wiring it into `runsc gpu-scheduler`). Unbuilt
+  here (no go/bazel); build with `bazel test //pkg/gpusched/residency:...`.
 - a first real GPU run: launch the per-model vLLM servers and `benchctl.py`,
   and compare measured hit-rate/latency to the `simulate.py` prediction.
