@@ -43,10 +43,17 @@ Four pieces; only the first two are new.
    back. That is exactly clean-cache evict/fault-in, per engine. The broker calls
    it; vLLM quiesces its own engine (you cannot yank VRAM from under a running
    engine, so cooperative beats a driver-level free). An engine with no
-   sleep/wake path gets a cruder stop/reload.
+   sleep/wake path gets a cruder stop/reload. PipeSwitch (OSDI '20, Table 1)
+   measured the dominant switch cost as CUDA-context + process init (5.5–7.3 s),
+   *not* the weight transfer — so keeping the engine and its CUDA context warm
+   and moving only weights is the right mechanism; a from-scratch reload pays
+   that multi-second tax on every fault.
 4. **Request router (exists, gains a hook).** On a request for a sleeping model:
-   enqueue, `wake_up()`, then dispatch. Latency added = reload time; hide it with
-   prefetch (wake on a traffic uptick, keep a warm set).
+   enqueue, `wake_up()`, then dispatch. Latency added = reload time; hide it two
+   ways: **prefetch** (wake on a traffic uptick, keep a warm set) and **pipelined
+   streaming** — DMA the weights in PipeSwitch-style layer groups overlapped with
+   the first forward pass, instead of blocking on the whole transfer before any
+   compute.
 
 ```
 request ─▶ router ─▶ model resident? ─yes─▶ serve
@@ -81,6 +88,13 @@ discarded.
 - **Reload cost:** pure pinned-host→device DMA. ~28 GB (14B/fp16) ≈ 0.44 s over
   PCIe Gen5 (~64 GB/s), ~30 ms over NVLink-C2C (~900 GB/s). No disk, no
   safetensors re-parse — that's the payoff of keeping the master in host RAM.
+- **The LLM regime inverts PipeSwitch.** Its CNNs were ~240 MB, so the weight
+  transfer (~80 ms) was negligible against the 5–7 s init, and it pipelined
+  mostly for latency polish. Our weights are 10–100+ GB, so transfer is
+  **seconds** and becomes the dominant fault cost. That makes PipeSwitch's
+  pipelined, layer-grouped streaming *essential* on the fault-in path, not
+  optional — and reframes vLLM's `cpu_offload_gb` as exactly that streaming half,
+  just without the residency cache in front of it.
 
 Reframe the quota model accordingly: a tenant's GPU-memory quota becomes its
 **max resident** (the VRAM guarantee), with a separate, larger **host-master
@@ -98,7 +112,11 @@ allowance / resident guarantee.
 - **Isolation holds.** Each host master lives in its own sandbox's host memory;
   weights are re-DMA'd only from the tenant's own master. No cross-tenant weight
   buffers, no shared clean copy — consistent with the existing gVisor isolation
-  model and the CNP tenant floor.
+  model and the CNP tenant floor. One caveat borrowed from PipeSwitch: its
+  task-cleaning frees only pointers, not the bytes, so a successor task could read
+  the prior model's VRAM. gVisor sandbox isolation contains that here, but any
+  device buffer freed on eviction and later handed to a *different* tenant must be
+  zeroed first (sub-millisecond at GPU bandwidth — ~240 MB in their example).
 - **Interaction with the GPU-time broker.** Residency (who's in VRAM) and
   time-slice weight (who gets GPU cycles) are orthogonal but both live in the
   broker: a model must be resident *before* it can be scheduled, so wake is a
@@ -150,8 +168,13 @@ allowance / resident guarantee.
   Σmodels > VRAM.
 
 ## Prior art
-- **PipeSwitch** (OSDI '20) — weights in pinned host memory, streamed in
-  layer-by-layer overlapped with compute; millisecond model-switching on a shared
-  GPU. Essentially this scheme; read first.
+- **PipeSwitch** (OSDI '20) — the mechanism this builds on. Weights in pinned
+  host memory (a shared *memory daemon*, model stored once), streamed to the GPU
+  in model-aware layer groups overlapped with compute, and *active-standby*
+  workers that keep a CUDA context warm. Switch overhead **5.4–34.6 ms**, 10–50×
+  better than NVIDIA MPS, ~100% utilization (ResNet-152/Inception/BERT, V100/T4).
+  It is a *context switch* between a small active set (one model + two standbys),
+  not a *cache*; our scheme adds pressure-driven eviction and a hit/miss rate on
+  top (the ServerlessLLM direction).
 - **ServerlessLLM** (OSDI '24) — multi-tier fast model loading for cold starts.
 - **vLLM sleep mode** — the per-engine evict/fault-in mechanism we'd drive.
