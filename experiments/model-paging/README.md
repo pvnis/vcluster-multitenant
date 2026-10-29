@@ -142,9 +142,11 @@ thereafter level-1 wake is a weight DMA from CPU RAM.
   master demotion across tiers; prefetch;
 - per-tenant reserved floors wired to the controller's quota;
 - integration into the gVisor broker as the residency manager — **Go port
-  started** in the fork at `pkg/gpusched/residency/` (Manager + LRU/CostAware/
+  in the fork** at `pkg/gpusched/residency/` (Manager + LRU/CostAware/
   FrequencyCost + atomic admit + fairness/floors, Go tests mirroring these, a
-  BUILD file, and `INTEGRATION.md` wiring it into `runsc gpu-scheduler`). Unbuilt
-  here (no go/bazel); build with `bazel test //pkg/gpusched/residency:...`.
+  BUILD file, and `INTEGRATION.md` wiring it into `runsc gpu-scheduler`).
+  **Verified** with `go test` (12 pass), `go vet` and `gofmt` clean on
+  midori-cp-0; `bazel test` (for nogo) + the command wiring remain for a build
+  host.
 - a first real GPU run: launch the per-model vLLM servers and `benchctl.py`,
   and compare measured hit-rate/latency to the `simulate.py` prediction.
