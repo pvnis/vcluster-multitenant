@@ -113,6 +113,66 @@ Reframe the quota model accordingly: a tenant's GPU-memory quota becomes its
 allowance** (how many models it may keep paged). Overcommit ratio = host
 allowance / resident guarantee.
 
+## Topology adaptation — degrades to PCIe, improves with the fabric
+
+The scheme bets on fault-in bandwidth, which the interconnect sets. It absorbs
+that because it is already a **multi-tier store + cost-model policy** keyed on
+each link's `(bandwidth, latency, capacity, scope)`. Topology doesn't change the
+*mechanism*; it reparameterizes the tiers and picks whether a fault-in is a
+**copy** or a **coherent no-copy**. So the residency manager must be
+**topology-aware**: read the node/domain interconnect map (the same one HAMi's
+`devicepairscore` now produces — see `README.md` step 6, NVLink topology
+scores), order tiers by *measured* BW/latency, and per link choose the fault
+mechanism.
+
+Tiers, by example hardware (order by measured BW, not this list):
+
+| tier | link | ~BW | fault mechanism | scope |
+| --- | --- | --- | --- | --- |
+| peer VRAM | NVLink / Infinity Fabric / SUP | 0.9–1.8 TB/s | copy (or direct access) | node / rack domain |
+| coherent host | NVLink-C2C / unified HBM (MI300A) | ~0.9 TB/s | **no-copy, HW migrate** | node |
+| CXL pool | CXL.mem | ~64 GB/s | no-copy (HBM caches it) | node / cluster |
+| pinned host DRAM | PCIe Gen4/5 | 32–64 GB/s | copy (DMA) | node |
+| remote mem / VRAM | RDMA 400/800G, NDR IB | 50–100 GB/s | copy (GPUDirect) | cluster |
+| NVMe / object | PCIe / network | 2–12 GB/s / less | copy | node / cluster |
+
+Three regimes:
+
+1. **PCIe-only — the floor the first cut targets.** 32–64 GB/s; a 28 GB model is
+   ~0.4–0.9 s and the transfer dominates. Earn it with a big resident set,
+   prefetch, pipelined layer-grouped streaming, and an accepted cold tail.
+   Fault-in = explicit DMA from pinned host RAM. Everything below relaxes this.
+2. **Coherent CPU↔GPU — the inversion (Grace/C2C, MI300A, CXL.mem).** ~900 GB/s
+   coherent links and large coherent host memory. Two shifts: fault-in is ~14×
+   cheaper *and* you can stop copying — let HBM be a hardware cache of the
+   coherent host/CXL master, the GPU's migration engine faulting pages on access.
+   Here the note's rejection of UVM / page-granular / sub-model paging
+   **reverses**: HW-managed migration (UVM + `ReadMostly`) is the right mechanism
+   and overcommit becomes cheap and fine-grained; the manager sets residency
+   hints instead of copying whole models.
+3. **GPU↔GPU fabric & scale-up — pooled VRAM (NVLink/NVSwitch, IF, UALink,
+   NVL72).** Other GPUs' HBM becomes a fast tier; evict to a peer at fabric speed,
+   not PCIe. "Resident" widens from per-GPU → per-node pool → per-rack domain, and
+   the manager runs at domain scope. Cross-GPU rebalancing is cheap — and this is
+   where the temporal axis **converges with AlpaServe's spatial one** (on a fast
+   uniform fabric, "move the model" and "split it across GPUs" are the same cheap
+   op). Fast RDMA / CXL pooling extends this *across nodes*: store each master
+   once in a memory server or CXL pool, GPUDirect it into HBM on a miss —
+   ServerlessLLM's cross-node tier at RDMA speed.
+
+**Invariant.** Clean-cache semantics, whole-model default, vLLM sleep/wake, and
+the cost-model placement policy are unchanged across all of this; only the tier
+parameters and the per-link copy-vs-coherent choice vary.
+
+midori today:
+- **A6000 (`midori-nv-0/1`)** — PCIe host path + a *weak* NVLink bridge (NV4,
+  ~49 GiB/s D2D within a pair; the paired GPU's VRAM is itself scarce). Regime 1:
+  bandwidth-starved — lean on prefetch + resident-set sizing.
+- **B300** — NVSwitch ~1.8 TB/s, ~275 GB HBM/GPU. Regime 3, the strong case: a
+  big pooled-VRAM tier makes paging cheap and attractive.
+- **Future Grace / MI300 / CXL** — regime 2, where we'd stop copying and let
+  coherent hardware page.
+
 ## Multi-tenant fairness & isolation (the midori-specific part)
 
 - **No noisy-neighbour eviction.** A tenant must not be able to force-evict
@@ -173,6 +233,9 @@ allowance / resident guarantee.
 - **KV on wake:** default to **recompute from tokens** — ServerlessLLM and vLLM
   show it's ~10× cheaper than moving KV. Open only for very long contexts, where
   swap-and-restore of the KV may still win.
+- **Topology map source:** reuse HAMi's `devicepairscore`/NVML for the
+  interconnect graph and per-link bandwidths, or probe them directly at broker
+  start? And on coherent fabrics, where's the copy-vs-let-hardware-migrate line?
 
 ## Alternatives considered
 
