@@ -188,6 +188,23 @@ allowance / resident guarantee.
   engine, no eviction; can't host more models than fit. This scheme is what lets
   Σmodels > VRAM.
 
+## Scope boundary: paging vs. model-parallel multiplexing
+
+Two orthogonal ways to share GPUs across many models:
+- **Temporal** (this note) — page models in/out of VRAM over time; attacks the
+  *memory* limit (Σmodels > VRAM).
+- **Spatial** (AlpaServe, OSDI '23) — keep all models resident but split them
+  across GPUs via model parallelism, so a burst to one model borrows idle GPUs;
+  attacks *burst latency*, and assumes everything already fits.
+
+**Decision (first cut): pursue temporal paging; defer model-parallel
+multiplexing.** Our bottleneck on sliced nodes is memory capacity (many idle
+tenants, Σ > VRAM), which is paging's regime — AlpaServe explicitly assumes all
+models fit and does no swapping. The two could compose later
+(model-parallel-colocate the *resident* hot set for burst tolerance), but that
+pins a model across several GPUs, enlarging its footprint and making clean
+whole-model eviction coarser — a second-phase question, not now.
+
 ## Prior art
 - **PipeSwitch** (OSDI '20) — the mechanism this builds on. Weights in pinned
   host memory (a shared *memory daemon*, model stored once), streamed to the GPU
@@ -204,4 +221,8 @@ allowance / resident guarantee.
   scheduler. 10–200× lower cold-start latency than KServe/Ray Serve. It does
   cold-start-from-storage and cross-node scheduling, *not* within-GPU clean-cache
   overcommit — the two compose.
+- **AlpaServe** (OSDI '23) — the orthogonal *spatial* axis: statistical
+  multiplexing via model parallelism (split resident models across GPUs for burst
+  tolerance), assuming all models fit in VRAM, no swapping. 10× rate / 6×
+  burstiness / 2.5× tighter SLO. Deferred — see Scope boundary.
 - **vLLM sleep mode** — the per-engine evict/fault-in mechanism we'd drive.
