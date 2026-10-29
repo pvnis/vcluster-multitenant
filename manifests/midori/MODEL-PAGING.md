@@ -28,16 +28,26 @@ buys the page-thrash problem; rejected. See `#alternatives`.
 
 Four pieces; only the first two are new.
 
-1. **Host-master store (new).** Each model's weights pinned (page-locked) in the
-   owning sandbox's host RAM — the authoritative clean copy, for fast
-   host→device DMA on fault-in. Per-tenant, inside the tenant's gVisor sandbox:
-   no cross-tenant weight sharing, so isolation is preserved by construction.
-   (Shared base weights / LoRA adapters could share a master later; out of scope
-   here.)
+1. **Host-master store (new), multi-tier.** The authoritative clean copy of each
+   model's weights, held in the fastest tier with room: **pinned host RAM** (hot
+   master, direct DMA) → **local NVMe** → **remote/object store** (cold). This is
+   ServerlessLLM's hierarchy (OSDI '24): the colder tiers only hurt if the loader
+   is slow, so store weights in a **loading-optimized format** (chunked,
+   word-aligned, a name→offset index) and load with `O_DIRECT` + pinned buffers +
+   parallel I/O threads, pipelined and overlapped with engine init — **not**
+   `mmap` (page-fault stalls; ServerlessLLM measured 112K faults for a 7B model).
+   Per-tenant, inside the tenant's gVisor sandbox: no cross-tenant weight sharing,
+   so isolation holds by construction. (Shared base weights / LoRA could share a
+   master later; out of scope.)
 2. **Residency manager (new, in the broker).** The `runsc gpu-scheduler` already
-   tracks per-sandbox VRAM on each node. Extend it to track, per model, whether
-   weights are **resident** or **sleeping**, plus a hot/idle signal, and to own
-   the eviction policy. It is the *brain*; it does not touch GPU memory itself.
+   tracks per-sandbox VRAM on each node. Extend it to track, per model, **which
+   tier** holds its weights (VRAM / pinned RAM / NVMe / remote) and a hot/idle
+   signal, and to own a **cost-model placement policy**, not just LRU: on a miss
+   it estimates *time to make M resident here* — load-from-tier (ServerlessLLM's
+   `q + n/b`: queue + size/bandwidth) vs evict an idle victim vs **migrate** a
+   running inference off this GPU — and picks the minimum, subject to per-tenant
+   reserved resident sets. It is the *brain*; it never touches GPU memory itself.
+   (This is ServerlessLLM's scheduler, scoped to one node's VRAM.)
 3. **Evict/reload executor = vLLM sleep/wake.** vLLM's `sleep(level=1)` already
    offloads weights to pinned host RAM and frees KV; `wake_up()` re-DMAs them
    back. That is exactly clean-cache evict/fault-in, per engine. The broker calls
@@ -82,9 +92,11 @@ discarded.
 - **VRAM:** Σ(resident weights + their live KV) ≤ physical VRAM. This is what
   paging lets you *overcommit against* — the resident set is the hot models, not
   all models.
-- **Pinned host RAM (the new wall):** Σ(all models' weights, resident + sleeping)
-  ≤ host RAM. Cheaper and bigger than VRAM, but finite. Backing with mmap'd files
-  instead of pinned RAM is cheaper still, at the cost of a disk→host→device miss.
+- **Host tiers (the new wall), not a single number.** Σ(weights kept warm in
+  pinned RAM) ≤ host RAM; colder models spill to NVMe, then remote. The wall is
+  *per tier*, and a miss's cost is which tier the master sits in — so the
+  eviction/placement policy reasons about tiers, not a binary resident/sleeping
+  (ServerlessLLM's `q + n/b` per-tier load-time model).
 - **Reload cost:** pure pinned-host→device DMA. ~28 GB (14B/fp16) ≈ 0.44 s over
   PCIe Gen5 (~64 GB/s), ~30 ms over NVLink-C2C (~900 GB/s). No disk, no
   safetensors re-parse — that's the payoff of keeping the master in host RAM.
@@ -121,6 +133,11 @@ allowance / resident guarantee.
   time-slice weight (who gets GPU cycles) are orthogonal but both live in the
   broker: a model must be resident *before* it can be scheduled, so wake is a
   precondition the time-scheduler waits on.
+- **Cross-node rebalancing (optional, fleet-level).** A hot node can shed load by
+  *migrating* a tenant's inference to another node — ship the tokens (10–100 KB)
+  and **recompute** KV at the destination (ServerlessLLM: ~10× cheaper than moving
+  the 1–10 GB KV; recomputing 1000 tokens ≈ generating ~100). Orthogonal to
+  within-node eviction; a lever the broker gains once it spans nodes.
 
 ## What stays vs changes
 
@@ -128,7 +145,7 @@ allowance / resident guarantee.
 | --- | --- |
 | **Unchanged** | gVisor nvproxy/amdproxy, per-pod VRAM limit enforcement, the GPU-time scheduler, PagedAttention KV management, tenant isolation. |
 | **Changes** | Quota semantics: `max VRAM` → `max resident` + `host-master allowance`. The broker gains a residency manager + eviction policy. |
-| **New** | Host-master store (pinned per sandbox), vLLM sleep/wake wired to the broker, router fault-in hook + prefetch. |
+| **New** | Multi-tier host-master store (pinned RAM → NVMe → remote, per sandbox), vLLM sleep/wake wired to the broker, router fault-in hook + prefetch/pipelined streaming. |
 
 ## Prototype plan (prove it before touching the broker)
 
@@ -145,13 +162,17 @@ allowance / resident guarantee.
 
 - **Cold-start SLO:** is a ~0.4 s (PCIe) first-token tail acceptable for cold
   tenants, or do we need a guaranteed warm set per tier? Prefetch accuracy?
-- **Eviction policy:** LRU + hysteresis + active-pin is the start; do we need
-  per-tenant reservations / priority tiers to avoid starvation?
-- **Host-master lifetime:** per-vLLM pinned (simple, isolated) vs a shared mmap
-  store for identical base weights / LoRA (cheaper, needs careful isolation).
+- **Eviction/placement policy:** cost-model (load-from-tier vs evict vs migrate)
+  over plain LRU — how accurate must the cost estimates be, and do we need
+  per-tenant reserved resident sets / priority tiers to avoid starvation?
+- **Host-master lifetime & tiering:** per-tenant tiered masters (simple,
+  isolated) vs a shared store for identical base weights / LoRA (cheaper, needs
+  careful cross-tenant isolation). Which tiers per node — RAM-only, or RAM+NVMe?
 - **Who quiesces:** rely on vLLM sleep/wake, or can the broker free device
   buffers at the driver level for engines without it (and how to make that safe)?
-- **KV on wake:** always recompute, or swap-and-restore for long contexts?
+- **KV on wake:** default to **recompute from tokens** — ServerlessLLM and vLLM
+  show it's ~10× cheaper than moving KV. Open only for very long contexts, where
+  swap-and-restore of the KV may still win.
 
 ## Alternatives considered
 
@@ -176,5 +197,11 @@ allowance / resident guarantee.
   It is a *context switch* between a small active set (one model + two standbys),
   not a *cache*; our scheme adds pressure-driven eviction and a hit/miss rate on
   top (the ServerlessLLM direction).
-- **ServerlessLLM** (OSDI '24) — multi-tier fast model loading for cold starts.
+- **ServerlessLLM** (OSDI '24) — the storage/cluster substrate this would feed.
+  Multi-tier near-GPU checkpoint cache (DRAM→NVMe→remote) with a loading-optimized
+  format + `O_DIRECT`/pinned/pipelined loader (3.6–8.2× vs PyTorch/Safetensors),
+  live migration by token-replay + KV recompute, and a startup-time cost-model
+  scheduler. 10–200× lower cold-start latency than KServe/Ray Serve. It does
+  cold-start-from-storage and cross-node scheduling, *not* within-GPU clean-cache
+  overcommit — the two compose.
 - **vLLM sleep mode** — the per-engine evict/fault-in mechanism we'd drive.
