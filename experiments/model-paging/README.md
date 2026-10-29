@@ -21,7 +21,7 @@ Two layers, same policy core:
 
 | file | what |
 | --- | --- |
-| `residency.py` | policy brain. Multi-tier masters, clean-cache (evict = free, no writeback), whole-model, pluggable eviction policy (`LRU`, or `CostAwareLRU` which protects slow-to-reload masters) with fairness (own-idle-first; never below a tenant's reserved floor), pinned-never-evicted. `admit()` is atomic: it plans + applies all evictions and returns the victims, or raises `CapacityError` having changed nothing. |
+| `residency.py` | policy brain. Multi-tier masters, clean-cache (evict = free, no writeback), whole-model, pluggable policy (`LRU`; `CostAwareLRU` protects slow-to-reload masters; `FrequencyCost` is the admission cost model — frequency+refault-cost, scan-resistant) with fairness (own-idle-first; never below a tenant's reserved floor), pinned-never-evicted. `admit()` is atomic: it plans + applies all evictions and returns the victims, or raises `CapacityError` having changed nothing. |
 | `workload.py` | N models across tenants, Zipfian popularity, bursty (Gamma/CV) arrivals. |
 | `simulate.py` | analytic single-GPU sim + metrics + budget sweep. |
 | `backend.py` | async engine backends: `MockBackend` (no GPU; tracks physical VRAM so tests can assert no oversubscription) and `VLLMBackend` (real vLLM sleep/wake, GPU-only) + `measure_wake()`. |
@@ -30,14 +30,14 @@ Two layers, same policy core:
 | `serve.py` | **the real serving path** — a paging-aware OpenAI proxy over per-model vLLM servers (`ServerBackend` wakes/sleeps them via vLLM's `/wake_up` `/sleep` admin endpoints; streaming forwarded through). Driven by stock `vllm bench serve`. |
 | `benchctl.py` | launches one `vllm bench serve` per model with Zipfian rates against the proxy, for a realistic multi-model load. |
 | `models.example.json` | sample proxy config (name, url, size_mib, tenant). |
-| `test_residency.py` | 13 policy unit tests. |
+| `test_residency.py` | 14 policy unit tests. |
 | `test_pager.py` | 6 async concurrency tests. |
 | `test_serve.py` | 4 proxy integration tests (routing, wake/sleep on miss, no forward-to-sleeping under load, 404/503) with injected fakes — no GPU. |
 
 ## Run
 
 ```bash
-python3 -m unittest             # all 23 tests (stdlib only, no GPU)
+python3 -m unittest             # all 24 tests (stdlib only, no GPU)
 python3 simulate.py             # analytic scenario + budget sweep
 python3 simulate.py --policy cost --nvme-frac 0.4   # cost-aware vs LRU comparison
 python3 replay.py               # live daemon replay (MockBackend)
@@ -85,9 +85,11 @@ and proceeds when it frees).
 
 ## Simplifications (first cut; see MODEL-PAGING.md)
 
-- **Eviction is pluggable** — `LRU`, or `CostAwareLRU` which protects
-  slow-to-reload masters (`--policy cost`). The fuller cost-model placement
-  (choosing load-from-tier vs evict vs migrate on admission) is still ahead.
+- **Policy is pluggable** — `LRU`; `CostAwareLRU` (`--policy cost`) protects
+  slow-to-reload masters; `FrequencyCost` (`--policy freq`) is the admission cost
+  model (frequency × refault cost; scan-resistant). On a single node the design's
+  "load-from-tier vs evict vs migrate" collapses — migrate across nodes is the
+  remaining piece.
 - **One master tier** per run (default pinned host RAM); the manager supports
   per-model tiers — extend `make_models` for multi-tier / peer-VRAM studies.
 - **Modeled latencies** in the sim / `MockBackend` (compressed by `speedup`).
@@ -136,8 +138,8 @@ thereafter level-1 wake is a weight DMA from CPU RAM.
 
 ## Next steps toward production
 
-- full cost-model placement (load-from-tier vs evict vs migrate on admission),
-  building on the pluggable policy; master demotion across tiers; prefetch;
+- cross-node placement/migration (the multi-node half of the cost model);
+  master demotion across tiers; prefetch;
 - per-tenant reserved floors wired to the controller's quota;
 - integration into the gVisor broker as the residency manager;
 - a first real GPU run: launch the per-model vLLM servers and `benchctl.py`,

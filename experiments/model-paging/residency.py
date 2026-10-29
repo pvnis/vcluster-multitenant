@@ -66,6 +66,9 @@ class _Entry:
 class LRU:
     """Least-recently-used first."""
 
+    def on_access(self, model: Model, now: float) -> None:
+        pass
+
     def rank(self, entry: "_Entry", incoming: Model, mgr: "ResidencyManager") -> float:
         return entry.last_used
 
@@ -81,8 +84,44 @@ class CostAwareLRU:
     def __init__(self, beta: float = 30.0):
         self.beta = beta
 
+    def on_access(self, model: Model, now: float) -> None:
+        pass
+
     def rank(self, entry: "_Entry", incoming: Model, mgr: "ResidencyManager") -> float:
         return entry.last_used + self.beta * mgr.fault_seconds(entry.model)
+
+
+class FrequencyCost:
+    """Admission/eviction cost model (TinyLFU / GDSF-flavored). Keeps a decaying
+    access-frequency estimate per model and evicts, among eligible victims, the
+    one with the lowest *retention priority* `freq * (1 + beta*refault_seconds)`
+    (oldest first to break ties). So a model that is both popular and expensive to
+    reload is kept; a one-off model is evicted first. Unlike plain LRU this
+    resists cache pollution by a 'scan' of cold models that would otherwise push
+    the hot working set out.
+
+    Admission on a single node must still wake the requested model (there is no
+    remote copy to serve from), but a just-admitted one-off starts at frequency 1
+    and so becomes the prime victim next, bounding the damage to the working set.
+    `age_period` halves all frequencies periodically so popularity adapts."""
+
+    def __init__(self, beta: float = 10.0, age_period: int = 256):
+        self.beta = beta
+        self.age_period = age_period
+        self.freq: dict[str, float] = {}
+        self.ops = 0
+
+    def on_access(self, model: Model, now: float) -> None:
+        self.ops += 1
+        if self.age_period and self.ops % self.age_period == 0:
+            for k in self.freq:
+                self.freq[k] *= 0.5
+        self.freq[model.name] = self.freq.get(model.name, 0.0) + 1.0
+
+    def rank(self, entry: "_Entry", incoming: Model, mgr: "ResidencyManager"):
+        f = self.freq.get(entry.model.name, 1.0)
+        priority = f * (1.0 + self.beta * mgr.fault_seconds(entry.model))
+        return (priority, entry.last_used)   # low priority, then oldest, first
 
 
 class ResidencyManager:
@@ -137,6 +176,7 @@ class ResidencyManager:
             self.capacity_stalls += 1
             raise CapacityError(f"{model.name} ({model.size_mib} MiB) > budget "
                                 f"({self.budget} MiB)")
+        self.policy.on_access(model, now)   # frequency/recency signal for the policy
         e = self.resident.get(model.name)
         if e is not None:
             e.last_used = now

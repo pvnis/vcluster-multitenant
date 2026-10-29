@@ -22,7 +22,7 @@ import random
 from dataclasses import dataclass
 
 import workload
-from residency import (CapacityError, CostAwareLRU, LRU, Model,
+from residency import (CapacityError, CostAwareLRU, FrequencyCost, LRU, Model,
                        ResidencyManager, Tier)
 
 # Default interconnect tiers (decimal GB/s). See MODEL-PAGING.md topology table.
@@ -137,7 +137,7 @@ def _print_summary(tag, s):
 
 
 def make_policy(name):
-    return CostAwareLRU() if name == "cost" else LRU()
+    return {"cost": CostAwareLRU, "freq": FrequencyCost, "lru": LRU}.get(name, LRU)()
 
 
 def run_scenario(args):
@@ -199,8 +199,9 @@ def build_parser():
     p.add_argument("--prompt-mean", type=int, default=512, dest="prompt_mean")
     p.add_argument("--output-mean", type=int, default=128, dest="output_mean")
     p.add_argument("--master-tier", default="pinned_ram")
-    p.add_argument("--policy", choices=["lru", "cost"], default="lru",
-                   help="eviction policy; 'cost' protects slow-to-reload masters")
+    p.add_argument("--policy", choices=["lru", "cost", "freq"], default="lru",
+                   help="eviction policy; 'cost' protects slow-to-reload masters, "
+                        "'freq' is the frequency+cost admission model (scan-resistant)")
     p.add_argument("--nvme-frac", type=float, default=0.0, dest="nvme_frac",
                    help="fraction of masters on NVMe (enables the policy comparison)")
     p.add_argument("--seed", type=int, default=1)

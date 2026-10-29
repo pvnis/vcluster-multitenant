@@ -5,7 +5,7 @@ import random
 import unittest
 
 import workload
-from residency import (CapacityError, CostAwareLRU, LRU, Model,
+from residency import (CapacityError, CostAwareLRU, FrequencyCost, LRU, Model,
                        ResidencyManager, Tier)
 
 TIERS = [Tier("pinned_ram", 64.0), Tier("nvme", 6.0)]
@@ -124,6 +124,29 @@ class TestResidency(unittest.TestCase):
         cost = run(CostAwareLRU(beta=30.0))
         self.assertTrue(cost.is_resident("b"))   # cost-aware keeps expensive b
         self.assertFalse(cost.is_resident("a"))
+
+
+    def test_frequency_cost_is_scan_resistant(self):
+        # Two hot models + a budget that fits 3, then a scan of cold one-offs.
+        # Plain LRU lets the scan evict both hot models; the frequency+cost
+        # admission model keeps them resident (cold ones cycle in the spare slot).
+        h1, h2 = mk("h1", "t0", 4000), mk("h2", "t0", 4000)
+        cold = [mk(f"c{i}", "t0", 4000) for i in range(6)]
+
+        def run(policy):
+            m = ResidencyManager(12000, TIERS, policy=policy)  # fits 3
+            t = 0.0
+            for _ in range(10):                 # warm the hot pair
+                for h in (h1, h2):
+                    t += 1; m.access(h, t)
+            for c in cold:                       # a scan of one-offs
+                t += 1; m.access(c, t)
+            return m
+
+        lru = run(LRU())
+        self.assertFalse(lru.is_resident("h1") or lru.is_resident("h2"))  # both lost
+        freq = run(FrequencyCost())
+        self.assertTrue(freq.is_resident("h1") and freq.is_resident("h2"))  # both kept
 
 
 class TestSimSmoke(unittest.TestCase):

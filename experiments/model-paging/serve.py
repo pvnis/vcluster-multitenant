@@ -190,7 +190,7 @@ def main():
     p = argparse.ArgumentParser(description="Paging-aware OpenAI proxy over vLLM servers")
     p.add_argument("--config", required=True, help="models config JSON")
     p.add_argument("--budget", type=int, required=True, help="VRAM budget MiB")
-    p.add_argument("--policy", choices=["lru", "cost"], default="lru")
+    p.add_argument("--policy", choices=["lru", "cost", "freq"], default="lru")
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--port", type=int, default=8000)
     args = p.parse_args()
