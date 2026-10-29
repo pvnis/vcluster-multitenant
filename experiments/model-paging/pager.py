@@ -56,11 +56,26 @@ class ModelPager:
         self.hits = 0
         self.misses = 0
 
+    async def acquire(self, model_name: str):
+        """Make the model resident and pin it for the duration of a request.
+        Returns (fault_seconds, hit). Raises CapacityError if it can never fit.
+        The caller MUST call release() when done (use a try/finally)."""
+        model = self.models[model_name]
+        return await self._ensure_resident(model)
+
+    async def release(self, model_name: str) -> None:
+        async with self._cond:
+            self.mgr.unpin(model_name)
+            self._cond.notify_all()                # a pin freed -> admissions may retry
+
     async def generate(self, model_name: str, prompt: str, max_tokens: int = 16):
+        """Convenience path used by the simulator/tests and the MockBackend.
+        The real server (serve.py) uses acquire()/release() around a streamed
+        proxy instead, so it never calls backend.infer()."""
         model = self.models[model_name]
         t0 = time.perf_counter()
         try:
-            fault, hit = await self._ensure_resident(model)
+            fault, hit = await self.acquire(model_name)
         except CapacityError:
             self.stats.rejects += 1
             self.stats.records.append(
@@ -70,9 +85,7 @@ class ModelPager:
         try:
             result = await self.be.infer(model.name, prompt, max_tokens)
         finally:
-            async with self._cond:
-                self.mgr.unpin(model.name)
-                self._cond.notify_all()            # a pin freed -> admissions may retry
+            await self.release(model_name)
         self.stats.records.append(
             Record(model.name, model.tenant, hit, fault, setup))
         return result

@@ -11,8 +11,11 @@ Two layers, same policy core:
    thrash) over whole traces in milliseconds. No GPU.
 2. **The real daemon** (`pager.py`) — an online, concurrent request server that
    actually drives engine sleep/wake through a `Backend`. Runs anywhere against
-   `MockBackend`; runs on a GPU against `VLLMBackend`. `replay.py` fires a trace
-   at it live.
+   `MockBackend`; `replay.py` fires a trace at it live.
+3. **The real serving path** (`serve.py`) — a paging-aware **OpenAI proxy** over
+   per-model **vLLM** servers, wakes/sleeps them via vLLM's admin endpoints, and
+   is driven by stock **`vllm bench serve`** (`benchctl.py`). See the GPU recipe
+   below.
 
 ## Files
 
@@ -24,13 +27,17 @@ Two layers, same policy core:
 | `backend.py` | async engine backends: `MockBackend` (no GPU; tracks physical VRAM so tests can assert no oversubscription) and `VLLMBackend` (real vLLM sleep/wake, GPU-only) + `measure_wake()`. |
 | `pager.py` | **ModelPager** — the online daemon: per-model transition locks, a global DMA-serializing lock, and a condition var so an admission whose victims are all pinned waits for an unpin. Inference holds only a pin, so resident models serve concurrently. |
 | `replay.py` | drives a trace at the live pager at (compressed) real time; reports hit rate, wakes/evicts, peak VRAM vs budget, setup latency. |
-| `test_residency.py` | 12 policy unit tests. |
-| `test_pager.py` | 6 async concurrency tests (wake coalescing, no oversubscription under load, pinned-victim blocking, rejects). |
+| `serve.py` | **the real serving path** — a paging-aware OpenAI proxy over per-model vLLM servers (`ServerBackend` wakes/sleeps them via vLLM's `/wake_up` `/sleep` admin endpoints; streaming forwarded through). Driven by stock `vllm bench serve`. |
+| `benchctl.py` | launches one `vllm bench serve` per model with Zipfian rates against the proxy, for a realistic multi-model load. |
+| `models.example.json` | sample proxy config (name, url, size_mib, tenant). |
+| `test_residency.py` | 13 policy unit tests. |
+| `test_pager.py` | 6 async concurrency tests. |
+| `test_serve.py` | 4 proxy integration tests (routing, wake/sleep on miss, no forward-to-sleeping under load, 404/503) with injected fakes — no GPU. |
 
 ## Run
 
 ```bash
-python3 -m unittest             # all 18 tests (stdlib only, no GPU)
+python3 -m unittest             # all 23 tests (stdlib only, no GPU)
 python3 simulate.py             # analytic scenario + budget sweep
 python3 simulate.py --policy cost --nvme-frac 0.4   # cost-aware vs LRU comparison
 python3 replay.py               # live daemon replay (MockBackend)
@@ -88,19 +95,50 @@ and proceeds when it frees).
   are the result.
 - Single GPU; decode assumed overlapped by continuous batching.
 
-## Going live (GPU node)
+## Real vLLM + vllm-bench (GPU node)
 
-1. **Calibrate**: `python3 backend.py <hf-model-id-or-path>` sleeps/wakes a real
-   vLLM engine and prints wall-clock wake latency. Feed it into the
-   `pinned_ram` tier bandwidth in `simulate.py` / `replay.py`.
-2. **Serve**: in `replay.py`, swap `make_backend` to
-   `VLLMBackend({name: path, ...}, tensor_parallel_size=..., gpu_memory_utilization=...)`.
-   The pager drives it unchanged — `access`/`pin`/`unpin` ↔ `load`/`evict`/`infer`.
+The real serving path is `serve.py`: a paging-aware OpenAI proxy over per-model
+vLLM servers, driven by the standard `vllm bench serve`. Each model is a normal
+vLLM server (so batching + streaming are vLLM's); the proxy wakes/sleeps them
+via the dev-mode admin endpoints as load shifts, overcommitting VRAM.
+
+1. **Launch one vLLM server per model with sleep mode.** Size
+   `--gpu-memory-utilization` so the *resident set* fits — if the budget holds 2
+   models awake on an 80 GB GPU, give each ~0.45:
+   ```bash
+   VLLM_SERVER_DEV_MODE=1 vllm serve <path-a> --port 8101 --enable-sleep-mode --gpu-memory-utilization 0.45
+   VLLM_SERVER_DEV_MODE=1 vllm serve <path-b> --port 8102 --enable-sleep-mode --gpu-memory-utilization 0.45
+   # put the cold ones to sleep so VRAM starts free:
+   curl -X POST localhost:8102/sleep?level=1
+   ```
+2. **Describe them** in a config (see `models.example.json`): `name, url,
+   size_mib, tenant`.
+3. **Start the proxy:**
+   ```bash
+   python3 serve.py --config models.json --budget <MiB> --policy cost --port 8000
+   ```
+   `--budget` is the VRAM the awake set may use (Σ resident `size_mib` ≤ it).
+4. **Drive load across all models** with vllm-bench:
+   ```bash
+   python3 benchctl.py --config models.json --base-url http://127.0.0.1:8000 \
+       --total-rate 20 --num-prompts 1500
+   ```
+   (one `vllm bench serve` per model, Zipfian rates; results in `bench-*.json`.)
+
+**Calibrate** the simulator's tier bandwidths from real hardware with
+`python3 backend.py <model>` (wall-clock wake latency), then the `simulate.py`
+curves predict what the proxy does.
+
+Caveats: the `/sleep` `/wake_up` endpoints and flags follow vLLM's dev-mode
+[sleep docs](https://docs.vllm.ai/en/latest/features/sleep_mode/) — confirm for
+your version. First wake of a never-slept server is a normal cold start;
+thereafter level-1 wake is a weight DMA from CPU RAM.
 
 ## Next steps toward production
 
 - full cost-model placement (load-from-tier vs evict vs migrate on admission),
   building on the pluggable policy; master demotion across tiers; prefetch;
 - per-tenant reserved floors wired to the controller's quota;
-- an HTTP front end (FastAPI, available with vLLM) over `ModelPager.generate`;
-- integration into the gVisor broker as the residency manager.
+- integration into the gVisor broker as the residency manager;
+- a first real GPU run: launch the per-model vLLM servers and `benchctl.py`,
+  and compare measured hit-rate/latency to the `simulate.py` prediction.
