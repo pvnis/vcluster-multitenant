@@ -22,17 +22,20 @@ class Request:
     output_tokens: int
 
 
-def make_models(n_models, n_tenants, size_choices_mib, master_tier, rng):
+def make_models(n_models, n_tenants, size_choices_mib, master_tier, rng,
+                nvme_frac=0.0, slow_tier="nvme"):
     """n_models spread round-robin across n_tenants; size drawn from
-    size_choices_mib. Every master sits in `master_tier` (one tier for the POC;
-    extend per-model for multi-tier studies)."""
+    size_choices_mib. Masters sit in `master_tier`, except a `nvme_frac` fraction
+    placed on `slow_tier` — so cost-aware eviction has a reason to prefer keeping
+    the slow-to-reload ones resident (multi-tier study)."""
     models = []
     for i in range(n_models):
+        tier = slow_tier if rng.random() < nvme_frac else master_tier
         models.append(Model(
             name=f"m{i:03d}",
             tenant=f"t{i % n_tenants}",
             size_mib=rng.choice(size_choices_mib),
-            master_tier=master_tier,
+            master_tier=tier,
         ))
     return models
 

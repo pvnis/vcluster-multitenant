@@ -22,7 +22,8 @@ import random
 from dataclasses import dataclass
 
 import workload
-from residency import CapacityError, Model, ResidencyManager, Tier
+from residency import (CapacityError, CostAwareLRU, LRU, Model,
+                       ResidencyManager, Tier)
 
 # Default interconnect tiers (decimal GB/s). See MODEL-PAGING.md topology table.
 DEFAULT_TIERS = [
@@ -121,6 +122,7 @@ def summarize(manager, records, reqs, models, budget):
         "ttft_p99_miss_ms": round(_pct(ttft_miss, 99) * 1000, 1),
         "queue_mean_ms": round((sum(queues) / len(queues) * 1000) if queues else 0.0, 1),
         "fault_mean_ms": round((sum(faults) / len(faults) * 1000) if faults else 0.0, 1),
+        "fault_total_s": round(sum(r.fault_s for r in served), 1),
         "gib_faulted": round(manager.mib_faulted / 1024, 1),
         "resident_end": len(manager.resident),
         "throughput_rps": round(len(served) / makespan, 2) if makespan else 0.0,
@@ -134,21 +136,35 @@ def _print_summary(tag, s):
         print(f"  {k:<{w}} : {v}")
 
 
+def make_policy(name):
+    return CostAwareLRU() if name == "cost" else LRU()
+
+
 def run_scenario(args):
     rng = random.Random(args.seed)
     models = workload.make_models(
         args.models, args.tenants,
         size_choices_mib=[int(x) for x in args.sizes.split(",")],
-        master_tier=args.master_tier, rng=rng)
+        master_tier=args.master_tier, rng=rng, nvme_frac=args.nvme_frac)
     trace = workload.gen_trace(
         models, args.requests, args.rate, args.cv, args.skew,
         args.prompt_mean, args.output_mean, rng)
     compute = ComputeModel()
 
-    mgr = ResidencyManager(args.budget, DEFAULT_TIERS)
+    mgr = ResidencyManager(args.budget, DEFAULT_TIERS, policy=make_policy(args.policy))
     records, reqs = simulate(mgr, trace, compute)
-    _print_summary(f"scenario (budget={args.budget} MiB)",
+    _print_summary(f"scenario (budget={args.budget} MiB, policy={args.policy})",
                    summarize(mgr, records, reqs, models, args.budget))
+
+    if args.nvme_frac > 0:
+        print("\n=== policy comparison (same trace & budget, "
+              f"{args.nvme_frac:.0%} masters on NVMe) ===")
+        for name in ("lru", "cost"):
+            m = ResidencyManager(args.budget, DEFAULT_TIERS, policy=make_policy(name))
+            recs, rq = simulate(m, trace, compute)
+            s = summarize(m, recs, rq, models, args.budget)
+            print(f"  {name:>5}: hit_rate={s['hit_rate']}  "
+                  f"fault_total_s={s['fault_total_s']}  ttft_p50_ms={s['ttft_p50_ms']}")
 
     if args.sweep:
         print("\n=== budget sweep (same trace) ===")
@@ -158,7 +174,7 @@ def run_scenario(args):
         print("  " + "  ".join(f"{h:>11}" for h in hdr))
         for frac in (1.0, 0.75, 0.5, 0.35, 0.25, 0.15):
             b = max(max(m.size_mib for m in models), int(total * frac))
-            m2 = ResidencyManager(b, DEFAULT_TIERS)
+            m2 = ResidencyManager(b, DEFAULT_TIERS, policy=make_policy(args.policy))
             recs, rq = simulate(m2, trace, compute)
             s = summarize(m2, recs, rq, models, b)
             row = (b, s["overcommit_x"], s["hit_rate"], s["ttft_p50_ms"],
@@ -183,6 +199,10 @@ def build_parser():
     p.add_argument("--prompt-mean", type=int, default=512, dest="prompt_mean")
     p.add_argument("--output-mean", type=int, default=128, dest="output_mean")
     p.add_argument("--master-tier", default="pinned_ram")
+    p.add_argument("--policy", choices=["lru", "cost"], default="lru",
+                   help="eviction policy; 'cost' protects slow-to-reload masters")
+    p.add_argument("--nvme-frac", type=float, default=0.0, dest="nvme_frac",
+                   help="fraction of masters on NVMe (enables the policy comparison)")
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--sweep", action="store_true", default=True)
     p.add_argument("--no-sweep", action="store_false", dest="sweep")

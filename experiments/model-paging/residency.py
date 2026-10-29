@@ -60,13 +60,39 @@ class _Entry:
     pins: int = 0        # >0 => in service, never evictable
 
 
+# -- eviction policies: order idle, non-protected victims (lower rank = evict
+#    first). Fairness (own-tenant-first) and floor/pin protection are invariants
+#    applied on top, so a policy only reorders among eligible victims. --
+class LRU:
+    """Least-recently-used first."""
+
+    def rank(self, entry: "_Entry", incoming: Model, mgr: "ResidencyManager") -> float:
+        return entry.last_used
+
+
+class CostAwareLRU:
+    """LRU, but protect models that are expensive to fault back in. Among
+    similarly-aged idle models, evict the one cheapest to reload first — so a
+    master on a slow tier (NVMe) is kept over one on a fast tier (pinned RAM /
+    NVLink) at equal recency. `beta` is seconds of extra staleness tolerated per
+    second of refault cost. This is the cost-model placement the design calls for,
+    scoped to one node (ServerlessLLM's `q + n/b`, victim side)."""
+
+    def __init__(self, beta: float = 30.0):
+        self.beta = beta
+
+    def rank(self, entry: "_Entry", incoming: Model, mgr: "ResidencyManager") -> float:
+        return entry.last_used + self.beta * mgr.fault_seconds(entry.model)
+
+
 class ResidencyManager:
     """Decides which models' weights are resident in one GPU's VRAM budget."""
 
-    def __init__(self, vram_budget_mib: int, tiers, reserved_mib=None):
+    def __init__(self, vram_budget_mib: int, tiers, reserved_mib=None, policy=None):
         self.budget = int(vram_budget_mib)
         self.tiers = {t.name: t for t in tiers}
         self.reserved = dict(reserved_mib or {})   # tenant -> MiB floor
+        self.policy = policy or LRU()
         self.resident: dict[str, _Entry] = {}
         self.used_mib = 0
         # stats
@@ -160,7 +186,8 @@ class ResidencyManager:
                 floor = self.reserved.get(t, 0)
                 if floor and tnow[t] - e.model.size_mib < floor:
                     continue
-                key = (0 if t == incoming.tenant else 1, e.last_used)
+                key = (0 if t == incoming.tenant else 1,
+                       self.policy.rank(e, incoming, self))
                 if best_key is None or key < best_key:
                     best_key, best_name, best_entry = key, name, e
             if best_name is None:

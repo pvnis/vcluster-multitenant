@@ -5,7 +5,8 @@ import random
 import unittest
 
 import workload
-from residency import CapacityError, Model, ResidencyManager, Tier
+from residency import (CapacityError, CostAwareLRU, LRU, Model,
+                       ResidencyManager, Tier)
 
 TIERS = [Tier("pinned_ram", 64.0), Tier("nvme", 6.0)]
 
@@ -105,6 +106,24 @@ class TestResidency(unittest.TestCase):
         mgr.access(mk("c", "t1", 4000), 20.0)           # t1 asks -> evict own 'b'
         self.assertTrue(mgr.is_resident("a"))           # t0 spared
         self.assertFalse(mgr.is_resident("b"))          # own idle evicted
+
+
+    def test_cost_aware_keeps_expensive_master(self):
+        # b's master is on slow NVMe (expensive to refault), a's on fast RAM;
+        # b is the older. LRU evicts the older b; cost-aware keeps b (costly to
+        # reload) and evicts the cheap-to-reload a instead.
+        def run(policy):
+            m = ResidencyManager(8000, TIERS, policy=policy)
+            m.access(mk("b", "t0", 4000, "nvme"), 1.0)        # older, expensive
+            m.access(mk("a", "t0", 4000, "pinned_ram"), 5.0)  # newer, cheap
+            m.access(mk("c", "t0", 4000), 6.0)                # evict one
+            return m
+        lru = run(LRU())
+        self.assertFalse(lru.is_resident("b"))   # plain LRU drops the older b
+        self.assertTrue(lru.is_resident("a"))
+        cost = run(CostAwareLRU(beta=30.0))
+        self.assertTrue(cost.is_resident("b"))   # cost-aware keeps expensive b
+        self.assertFalse(cost.is_resident("a"))
 
 
 class TestSimSmoke(unittest.TestCase):

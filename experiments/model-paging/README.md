@@ -18,7 +18,7 @@ Two layers, same policy core:
 
 | file | what |
 | --- | --- |
-| `residency.py` | policy brain. Multi-tier masters, clean-cache (evict = free, no writeback), whole-model, LRU eviction with fairness (own-idle-first; never below a tenant's reserved floor), pinned-never-evicted. `admit()` is atomic: it plans + applies all evictions and returns the victims, or raises `CapacityError` having changed nothing. |
+| `residency.py` | policy brain. Multi-tier masters, clean-cache (evict = free, no writeback), whole-model, pluggable eviction policy (`LRU`, or `CostAwareLRU` which protects slow-to-reload masters) with fairness (own-idle-first; never below a tenant's reserved floor), pinned-never-evicted. `admit()` is atomic: it plans + applies all evictions and returns the victims, or raises `CapacityError` having changed nothing. |
 | `workload.py` | N models across tenants, Zipfian popularity, bursty (Gamma/CV) arrivals. |
 | `simulate.py` | analytic single-GPU sim + metrics + budget sweep. |
 | `backend.py` | async engine backends: `MockBackend` (no GPU; tracks physical VRAM so tests can assert no oversubscription) and `VLLMBackend` (real vLLM sleep/wake, GPU-only) + `measure_wake()`. |
@@ -32,6 +32,7 @@ Two layers, same policy core:
 ```bash
 python3 -m unittest             # all 18 tests (stdlib only, no GPU)
 python3 simulate.py             # analytic scenario + budget sweep
+python3 simulate.py --policy cost --nvme-frac 0.4   # cost-aware vs LRU comparison
 python3 replay.py               # live daemon replay (MockBackend)
 python3 simulate.py --help      # knobs for both sim and replay
 ```
@@ -77,8 +78,9 @@ and proceeds when it frees).
 
 ## Simplifications (first cut; see MODEL-PAGING.md)
 
-- **LRU**, not yet the cost-model placement policy (load-from-tier vs evict vs
-  migrate) the design calls for.
+- **Eviction is pluggable** — `LRU`, or `CostAwareLRU` which protects
+  slow-to-reload masters (`--policy cost`). The fuller cost-model placement
+  (choosing load-from-tier vs evict vs migrate on admission) is still ahead.
 - **One master tier** per run (default pinned host RAM); the manager supports
   per-model tiers — extend `make_models` for multi-tier / peer-VRAM studies.
 - **Modeled latencies** in the sim / `MockBackend` (compressed by `speedup`).
@@ -97,7 +99,8 @@ and proceeds when it frees).
 
 ## Next steps toward production
 
-- cost-model placement over LRU; the multi-tier/peer-VRAM tiers from the topology
-  section; per-tenant reserved floors wired to the controller's quota;
+- full cost-model placement (load-from-tier vs evict vs migrate on admission),
+  building on the pluggable policy; master demotion across tiers; prefetch;
+- per-tenant reserved floors wired to the controller's quota;
 - an HTTP front end (FastAPI, available with vLLM) over `ModelPager.generate`;
 - integration into the gVisor broker as the residency manager.
