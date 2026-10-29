@@ -1,83 +1,103 @@
-# Model-paging POC
+# Model-paging POC + runtime
 
-A proof-of-concept for the VRAM-overcommit scheme in
-`../../manifests/midori/MODEL-PAGING.md`: treat model weights as a **clean cache**
-of a host-resident master, so eviction is free and only fault-in costs bandwidth.
+An implementation of the VRAM-overcommit scheme in
+`../../manifests/midori/MODEL-PAGING.md`: model weights are a **clean cache** of a
+host-resident master, so eviction is free and only fault-in costs bandwidth.
 
-This is **step 1 of the prototype plan** — an out-of-band residency manager + a
-discrete-event simulator that validates the *policy* (hit rate vs VRAM budget,
-cold-start tail, thrash, fairness) with **no GPU required** — plus a real vLLM
-backend seam (`vllm_backend.py`) you run on a GPU node to calibrate it.
+Two layers, same policy core:
+
+1. **Analytic simulator** (`simulate.py`) — a fast, instantaneous discrete-event
+   sweep for exploring the policy (hit rate vs VRAM budget, cold-start tail,
+   thrash) over whole traces in milliseconds. No GPU.
+2. **The real daemon** (`pager.py`) — an online, concurrent request server that
+   actually drives engine sleep/wake through a `Backend`. Runs anywhere against
+   `MockBackend`; runs on a GPU against `VLLMBackend`. `replay.py` fires a trace
+   at it live.
 
 ## Files
 
 | file | what |
 | --- | --- |
-| `residency.py` | the residency manager — pure policy + accounting. Multi-tier masters, clean-cache (evict = free), whole-model, LRU eviction with two fairness rules (own-idle-first; never below a tenant's reserved floor), pinned-never-evicted. Fault-in latency = weight bytes / master-tier bandwidth. |
-| `workload.py` | N models across tenants, Zipfian popularity, bursty arrivals (Poisson or Gamma at a target CV). |
-| `simulate.py` | single-GPU FCFS discrete-event sim + metrics + CLI (default scenario + budget sweep). |
-| `vllm_backend.py` | **GPU-only** seam: drives a real vLLM engine via `sleep`/`wake_up`, and `measure_wake()` to get wall-clock wake latency. Not imported by the sim or tests. |
-| `test_residency.py` | unit tests for the policy (stdlib `unittest`). |
+| `residency.py` | policy brain. Multi-tier masters, clean-cache (evict = free, no writeback), whole-model, LRU eviction with fairness (own-idle-first; never below a tenant's reserved floor), pinned-never-evicted. `admit()` is atomic: it plans + applies all evictions and returns the victims, or raises `CapacityError` having changed nothing. |
+| `workload.py` | N models across tenants, Zipfian popularity, bursty (Gamma/CV) arrivals. |
+| `simulate.py` | analytic single-GPU sim + metrics + budget sweep. |
+| `backend.py` | async engine backends: `MockBackend` (no GPU; tracks physical VRAM so tests can assert no oversubscription) and `VLLMBackend` (real vLLM sleep/wake, GPU-only) + `measure_wake()`. |
+| `pager.py` | **ModelPager** — the online daemon: per-model transition locks, a global DMA-serializing lock, and a condition var so an admission whose victims are all pinned waits for an unpin. Inference holds only a pin, so resident models serve concurrently. |
+| `replay.py` | drives a trace at the live pager at (compressed) real time; reports hit rate, wakes/evicts, peak VRAM vs budget, setup latency. |
+| `test_residency.py` | 12 policy unit tests. |
+| `test_pager.py` | 6 async concurrency tests (wake coalescing, no oversubscription under load, pinned-victim blocking, rejects). |
 
 ## Run
 
 ```bash
-python3 -m unittest            # 12 policy + smoke tests
-python3 simulate.py            # default scenario + budget sweep
-python3 simulate.py --help     # knobs: models/tenants/sizes/budget/rate/cv/skew/seed
-python3 simulate.py --budget 24000 --cv 1.0 --no-sweep
+python3 -m unittest             # all 18 tests (stdlib only, no GPU)
+python3 simulate.py             # analytic scenario + budget sweep
+python3 replay.py               # live daemon replay (MockBackend)
+python3 simulate.py --help      # knobs for both sim and replay
 ```
 
-Stdlib only (Python 3.12). No external deps for the sim or tests.
+Python 3.12, stdlib only for the sim/daemon/tests. `VLLMBackend` needs `vllm`.
 
-## What it shows (default: 24 models, 6 tenants, 6/12/24 GiB, bursty CV=3)
+## What it shows
 
-The budget sweep is the headline — one trace, shrinking VRAM:
+**Analytic sweep** (`simulate.py`, 24 models, 6.5× total weight vs VRAM, bursty):
 
 ```
-budget_MiB   overcmt  hit_rate  ttft_p50_ms  ttft_p99_ms  evict/req  stalls
-   312000       1.0     0.994        171          1701        0.0        0
-   156000       2.0     0.765        426          3120        0.23       0
-    78000       4.0     0.546        756          5258        0.45       0
-    46800      6.67     0.354       1171          6996        0.65       0
+budget_MiB   overcmt  hit_rate  ttft_p50_ms  ttft_p99_ms  evict/req
+   312000       1.0     0.994        171          1701        0.0
+   156000       2.0     0.765        426          3120        0.23
+    78000       4.0     0.546        756          5258        0.45
+    46800      6.67     0.354       1171          6996        0.65
 ```
 
-So you can host **2× the models in the same VRAM at ~77% hit rate** and ~426 ms
-p50 TTFT — memory overcommit works, and the cost curve is smooth, not a cliff.
-The cold-start penalty is isolated as `fault_mean_ms` (~206 ms for a ~14 GiB
-model over a 64 GB/s PCIe-Gen5 master), and shows up as the hit-vs-miss TTFT gap.
+→ **2× the models in the same VRAM at ~77% hit rate**, smooth cost curve.
 
-The tests pin the policy's correctness: clean eviction frees without writeback,
-capacity is never exceeded, LRU picks the right victim, pinned/active models are
-never evicted, a tenant's reserved floor is honored, requests evict their own
-idle models first, and Σmodels > budget is served by re-faulting cold models.
+**Live daemon** (`replay.py`): same overcommit, the real async server serves the
+whole trace with **0 rejects and peak VRAM == budget** (`peak_ok: True`) — the
+concurrency control never oversubscribes — while doing real wake/evict churn.
 
-## Simplifications (deliberate; see MODEL-PAGING.md for the full design)
+The tests pin both the policy (clean eviction, capacity bound, LRU victim,
+pinned/reserved protection, Σmodels > budget served) and the runtime (concurrent
+requests to a cold model trigger exactly one wake; 300 concurrent requests across
+20 models never exceed the budget; a request whose only victim is pinned waits
+and proceeds when it frees).
 
-- **Single GPU, one request in service at a time.** No continuous batching /
-  intra-GPU concurrency — decode is assumed to overlap across requests, so the
-  sim models GPU occupancy as *fault + prefill* (the latency-critical, memory-
-  sensitive path) and leaves decode out of the blocking path. The question here
-  is memory residency, not scheduler concurrency.
-- **LRU eviction**, not yet the cost-model placement policy (load-from-tier vs
-  evict vs migrate) the design calls for. LRU is the documented first cut.
-- **One master tier** per run (default pinned host RAM). The manager supports
-  per-model tiers; extend `make_models` for multi-tier studies.
-- **Prefill/fault latencies are modeled**, not measured. Calibrate them on real
-  hardware (below) before trusting absolute numbers; the *shape* of the curves is
-  the point.
+## Daemon concurrency model (pager.py)
+
+- one asyncio lock **per model** serializes that model's transitions, so
+  concurrent requests for a sleeping model trigger exactly one wake (and
+  resident-in-manager implies physically loaded, since the admitter holds the
+  lock across the whole wake);
+- one global **transition** lock serializes the actual DMAs (sleep/wake share
+  the PCIe link);
+- a **condition var** guards the manager and lets an admission whose victims are
+  all pinned wait for an in-flight request to unpin one;
+- **inference holds only a pin**, so many requests to resident models run
+  concurrently and the backend batches them.
+
+## Simplifications (first cut; see MODEL-PAGING.md)
+
+- **LRU**, not yet the cost-model placement policy (load-from-tier vs evict vs
+  migrate) the design calls for.
+- **One master tier** per run (default pinned host RAM); the manager supports
+  per-model tiers — extend `make_models` for multi-tier / peer-VRAM studies.
+- **Modeled latencies** in the sim / `MockBackend` (compressed by `speedup`).
+  Calibrate against real hardware before trusting absolute numbers — the shapes
+  are the result.
+- Single GPU; decode assumed overlapped by continuous batching.
 
 ## Going live (GPU node)
 
-`vllm_backend.py` is the seam. On a GPU node with vLLM:
+1. **Calibrate**: `python3 backend.py <hf-model-id-or-path>` sleeps/wakes a real
+   vLLM engine and prints wall-clock wake latency. Feed it into the
+   `pinned_ram` tier bandwidth in `simulate.py` / `replay.py`.
+2. **Serve**: in `replay.py`, swap `make_backend` to
+   `VLLMBackend({name: path, ...}, tensor_parallel_size=..., gpu_memory_utilization=...)`.
+   The pager drives it unchanged — `access`/`pin`/`unpin` ↔ `load`/`evict`/`infer`.
 
-```bash
-python3 vllm_backend.py <hf-model-id-or-path>   # prints wall-clock wake latency
-```
+## Next steps toward production
 
-Feed the measured wake latency back into `simulate.py`'s `DEFAULT_TIERS`
-(`pinned_ram` bandwidth) so the sim reflects your interconnect — then the
-hit-rate curve predicts real TTFT. Wiring the manager to drive a live
-`VLLMBackend` across a real request trace is the next step; the interfaces line
-up (`access`/`pin`/`unpin` ↔ `load`/`evict`/`infer`).
-```
+- cost-model placement over LRU; the multi-tier/peer-VRAM tiers from the topology
+  section; per-tenant reserved floors wired to the controller's quota;
+- an HTTP front end (FastAPI, available with vLLM) over `ModelPager.generate`;
+- integration into the gVisor broker as the residency manager.
