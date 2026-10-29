@@ -1,0 +1,6 @@
+[
+  {"name": "qwen-7b",   "url": "http://127.0.0.1:8101", "size_mib": 16000, "tenant": "t0"},
+  {"name": "llama-8b",  "url": "http://127.0.0.1:8102", "size_mib": 17000, "tenant": "t1"},
+  {"name": "qwen-14b",  "url": "http://127.0.0.1:8103", "size_mib": 30000, "tenant": "t0"},
+  {"name": "mistral-7b","url": "http://127.0.0.1:8104", "size_mib": 15000, "tenant": "t2"}
+]
