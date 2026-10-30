@@ -33,11 +33,15 @@ Two layers, same policy core:
 | `test_residency.py` | 14 policy unit tests. |
 | `test_pager.py` | 6 async concurrency tests. |
 | `test_serve.py` | 4 proxy integration tests (routing, wake/sleep on miss, no forward-to-sleeping under load, 404/503) with injected fakes — no GPU. |
+| `agent.py` | **proxy-less path** — a per-vLLM residency agent that dials the broker, does acquire-on-request / report-in-flight / honor-sleep, and drives a Backend. For multi-tenant: no shared data-path proxy. |
+| `broker.py` | reference residency broker (Python) over the `ResidencyManager` — the test counterpart to the Go broker in the gpu-scheduler. |
+| `PROTOCOL.md` | the agent↔broker wire protocol. |
+| `test_agent.py` | 5 end-to-end tests: agents ↔ broker over real unix sockets sharing one MockBackend (cold wake, cross-socket eviction, wake coalescing, reject, no oversubscription under 120 concurrent requests). |
 
 ## Run
 
 ```bash
-python3 -m unittest             # all 24 tests (stdlib only, no GPU)
+python3 -m unittest             # all 29 tests (stdlib only, no GPU)
 python3 simulate.py             # analytic scenario + budget sweep
 python3 simulate.py --policy cost --nvme-frac 0.4   # cost-aware vs LRU comparison
 python3 replay.py               # live daemon replay (MockBackend)
@@ -82,6 +86,30 @@ and proceeds when it frees).
   all pinned wait for an in-flight request to unpin one;
 - **inference holds only a pin**, so many requests to resident models run
   concurrently and the backend batches them.
+
+## Proxy-less path (multi-tenant)
+
+A shared OpenAI proxy (`serve.py`) in front of every tenant's vLLM is wrong for a
+multi-tenant cluster: it sees all tenants' request bytes and is a cross-tenant
+trust/failure domain. The proxy-less path moves residency to a **per-vLLM agent**
+(`agent.py`) that **dials the broker** — the same direction and trust model as a
+gVisor sandbox dialing the gpu-scheduler for GPU time — and exchanges only
+control signals (model id, size, acquire/grant/sleep), never request content.
+
+- On a request to a sleeping model the agent `acquire`s, waits for the broker's
+  `grant` (which arrives once victims elsewhere have slept), wakes vLLM, and
+  serves; it reports in-flight so the broker never evicts a busy model; on a
+  `sleep` directive it sleeps once idle. See `PROTOCOL.md`.
+- The broker is the Go `residency.Manager` in the gpu-scheduler (`broker.py` is
+  the Python reference here). It owns the policy; the agent enacts sleep/wake.
+- No data-path component, no inbound admin surface on the tenant's vLLM, and the
+  broker stays the same trust level as the time-slice scheduler.
+
+`test_agent.py` runs real agents against the broker over unix sockets sharing one
+`MockBackend` and asserts the budget is never oversubscribed under load. In
+production the agent is a vLLM plugin or a localhost sidecar in the tenant's pod,
+driving `VLLMBackend`. This is the recommended path for midori; `serve.py` remains
+the simplest single-tenant demonstrator.
 
 ## Simplifications (first cut; see MODEL-PAGING.md)
 
