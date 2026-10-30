@@ -37,6 +37,7 @@ Two layers, same policy core:
 | `broker.py` | reference residency broker (Python) over the `ResidencyManager` — the test counterpart to the Go broker in the gpu-scheduler. |
 | `PROTOCOL.md` | the agent↔broker wire protocol. |
 | `test_agent.py` | 5 end-to-end tests: agents ↔ broker over real unix sockets sharing one MockBackend (cold wake, cross-socket eviction, wake coalescing, reject, no oversubscription under 120 concurrent requests). |
+| `STREAMING-WAKE.md` | the vLLM engine change (weight DMA ∥ prefill) as a concrete patch sketch, the KServe integration, and the GPU benchmark runbook. `simulate.py --wake overlap` models its effect. |
 
 ## Run
 
