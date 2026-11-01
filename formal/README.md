@@ -98,9 +98,44 @@ java -cp tla2tools.jar tlc2.TLC -config GpuBroker_fixed.cfg GpuBroker.tla   # ex
   give each sandbox a weight of slots and have `Create`/`Destroy` move that many;
   the properties are unchanged.
 
+## Second model: `Isolation.als` — tenant isolation (Alloy)
+
+Alloy is the right tool for "is there a path tenant→tenant / tenant→platform
+through the policy set?" — bounded model-finding over relational logic.
+`Isolation.als` models the Cilium policy architecture: the deny **floor**
+(cross-tenant), **platform-guard** (tenant→platform except DNS + S3), and tenant
+self-widening (adversarial `allow`, with `permitted = allow − deny` so **denies
+win**).
+
+| command | expected |
+| --- | --- |
+| `check CrossTenantIsolation` | no counterexample — the floor denies cross-tenant regardless of tenant-authored allows |
+| `check GuardEnforcesPlatformIsolation` | no counterexample — with the guard, no tenant reaches a non-exempt platform endpoint |
+| `check NoTenantToForbiddenPlatform` | **counterexample** — *without* the guard, a tenant's `egress:{}` reaches a platform internal (the real pre-guard hole) |
+| `run DnsAndS3ReachableUnderGuard` | instance — the guard isn't over-broad; DNS + S3 stay reachable |
+
+The counterexample to `NoTenantToForbiddenPlatform` is the model-checked form of
+the hole `platform-guard` closed: a tenant workload with a permitted flow to an
+`OtherPlatform` workload (Loki / Prometheus / HAMi / webhook / registry).
+
+What it proves and assumes:
+- **Single-hop** reachability (a direct connection a Cilium policy governs) — the
+  right semantics for netpol. App-level pivots (tenant→S3, then S3 forwards) are a
+  different threat model, out of scope.
+- `allow` is adversarial (any tenant egress); `deny` is the platform's floor+guard;
+  `permitted = allow − deny` encodes "Cilium denies beat anything a tenant writes"
+  — the property that makes tenant self-service NetworkPolicy safe.
+- **Bounded** to scope 6: a clean `check` means "no counterexample up to 6 atoms of
+  each kind," not a universal proof. Raise the scope for more confidence.
+
+Running: open `Isolation.als` in the Alloy Analyzer
+(<https://github.com/AlloyTools/org.alloytools.alloy/releases>) and Execute each
+command, or run it headless with its CLI. Each `check` reports "No counterexample
+found" or shows one in the visualizer.
+
 ## Next models (planned)
 
-- **Per-device GPU memory limit** — "no tenant's attributed VRAM exceeds its limit"
-  (the `--nvproxy-gpu-memory-limit-per-device` accounting; B300 defect #3).
-- **Tenant isolation reachability** — better suited to Alloy: search for any
-  path tenant→tenant / tenant→platform through the Cilium policy set + `platform-guard`.
+- **Per-device GPU memory limit** (TLA+) — "no tenant's attributed VRAM exceeds its
+  limit" (the `--nvproxy-gpu-memory-limit-per-device` accounting; B300 defect #3).
+- **Isolation extensions** (Alloy) — add tenant→internet (the `network.internet`
+  gate) and tenant-authored NetworkPolicy ingress; raise the scope.
