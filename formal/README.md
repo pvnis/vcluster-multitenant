@@ -133,9 +133,45 @@ Running: open `Isolation.als` in the Alloy Analyzer
 command, or run it headless with its CLI. Each `check` reports "No counterexample
 found" or shows one in the visualizer.
 
+## Third model: `GpuMemLimit.tla` — per-device GPU memory limit (TLA+)
+
+Models B300 defect #3. HAMi's `gpumem` quota is **per device**, but the webhook
+first used it as the whole-sandbox **total**, so a multi-GPU pod could **stack its
+entire total onto one device** — past that device's share and into a co-tenant's
+VRAM on the same card. The fix (`--nvproxy-gpu-memory-limit-per-device`) attributes
+each allocation to the device it was made under and caps **per device**;
+unattributable VRAM counts against **every** device the pod uses.
+
+`PerDevice` (CONSTANT) toggles the fix vs. the bug. Topology: `p1` is a 2-GPU pod
+sharing device `g0` with the 1-GPU pod `p2`; `Card = 2 × GpuMem` sizes `g0` for both.
+
+Properties:
+- **`PerDeviceLimitHeld`** (security): no pod holds more than `GpuMem` on any device
+  it uses — this is the webhook's observed "+10000 on one GPU is refused."
+- **`NoOversubscription`** (isolation): no device holds more than `Card`, so no
+  tenant's VRAM spills into another's share (assumes placement sized the card).
+
+| config | `PerDevice` | expected |
+| --- | --- | --- |
+| `GpuMemLimit_bug.cfg` | FALSE | **FAILS** both — `p1` stacks `2×GpuMem` on `g0`, over its share and the card |
+| `GpuMemLimit_fixed.cfg` | TRUE | **clean** — each device capped at `GpuMem`; `g0` holds exactly `Card` |
+
+Extra lesson (set `Card = 3` in a copy of `_fixed`): `NoOversubscription` **FAILS
+even with the fix** — per-device enforcement caps each pod, but an under-provisioned
+card still oversubscribes. Enforcement needs correct placement/quota too (same shape
+as the broker's table-sizing lesson).
+
+Faithful detail: unattributable allocations (`AllocUn`) are charged to every device
+the pod uses, so under the fix they must fit on *all* of them — the conservative
+behaviour of the `NV01_DEVICE_0`-less case.
+
+Run: `java -cp tla2tools.jar tlc2.TLC -config GpuMemLimit_bug.cfg GpuMemLimit.tla`
+(and `_fixed`).
+
 ## Next models (planned)
 
-- **Per-device GPU memory limit** (TLA+) — "no tenant's attributed VRAM exceeds its
-  limit" (the `--nvproxy-gpu-memory-limit-per-device` accounting; B300 defect #3).
 - **Isolation extensions** (Alloy) — add tenant→internet (the `network.internet`
   gate) and tenant-authored NetworkPolicy ingress; raise the scope.
+- **Quota admission** (TLA+/Dafny) — the webhook is fail-closed and quota cannot be
+  bypassed (`failurePolicy: Fail`, the per-tenant ResourceQuota).
+- Wire the model checks into CI once TLC/Alloy can run in the pipeline.
