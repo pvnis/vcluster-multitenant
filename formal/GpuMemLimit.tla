@@ -92,7 +92,7 @@ Spec == Init /\ [][Next]_vars
 
 \* SECURITY: no pod holds more than its per-device limit on any device it uses.
 \* (The webhook's "+10000 on one GPU is refused" is this invariant.)
-PerDeviceLimitHeld == \A p \in Pods, d \in Uses[p] : Charged(p, d) <= GpuMem
+PerDeviceLimitHeld == \A p \in Pods : \A d \in Uses[p] : Charged(p, d) <= GpuMem
 
 \* ISOLATION: no device ever holds more than its capacity -- no tenant's VRAM
 \* spills into another tenant's share on that card. Assumes placement sized the
