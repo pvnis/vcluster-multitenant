@@ -1,0 +1,86 @@
+# Slice-density probe: how many slices fit on ONE physical GPU under the
+# existing 256-entry broker group table (g_ghostGroups[256]), WITHOUT touching
+# the driver fork.
+#
+# Two ceilings bind, whichever is lower (the ramp tells you which):
+#   - group-table:   256 / (group-slots per slice), NODE-WIDE (one table per
+#                    driver instance, shared across every GPU on the node).
+#   - context-memory: card_MiB / (~CUDA context overhead + tiny data). On the
+#                    A6000 (46068 MiB) at ~600-700 MiB/slice that's ~60-65, and
+#                    will likely bind BEFORE the table. On a B300-class card the
+#                    table is the real wall.
+#
+# PREREQUISITES
+#   1. Raise HAMi's advertised slices (else nothing >10 schedules). Edit the
+#      hami-device-plugin ConfigMap config.json: "devicesplitcount": 128, then
+#      `kubectl -n kube-system rollout restart ds/hami-device-plugin`.
+#      *** Cluster-wide — overpacks live GPUs. Do this on a CORDONED/DRAINED
+#          node, not against live tenant GPUs. Suggest: cordon nv-1, move its
+#          tenants off, test there. ***
+#   2. Pick the target GPU's UUID (so every replica lands on ONE card and that
+#      card gets the node's full table budget):
+#        kubectl get node <node> -o jsonpath=
+#          '{.metadata.annotations.hami\.io/node-nvidia-register}'
+#      Put it in use-gpuuuid below. Set nodeName to that node.
+#
+# RUN / RAMP
+#   kubectl apply -f slice-density.yaml
+#   for n in 10 20 40 60 80 100; do
+#     kubectl -n gpu-test scale deploy/slice-density --replicas=$n
+#     # wait for all Running (or Pending/OOM), then hold ~90s and read the watch
+#   done
+#
+# WATCH (the ceiling = the highest replica count where ALL pods are Running AND
+# table_full stayed 0)
+#   - running pods:   kubectl -n gpu-test get pods -l app=slice-density \
+#                       --field-selector=status.phase=Running | wc -l
+#   - table full:     gpusched_table_full_total   (Prometheus) — MUST stay flat;
+#                     any increment = you passed the group-table ceiling.
+#   - per-GPU load:   max(gpusched_sandboxes)      (Prometheus / admin board)
+#   - why it stopped: a pod stuck Pending  = HAMi fit limit (raise devicesplitcount
+#                     / memory);  a pod CrashLoop with CUDA OOM = context-memory
+#                     ceiling;  table_full ticked = group-table ceiling.
+#   - enforcement still holds? keep two of the replicas at different weights
+#     (annotate) and confirm the ~2:1 split persists at max density.
+#
+# Derive slots/slice:  256 / (table-full ceiling)  — tells you how close 100 is
+# on a big-memory card, and whether the driver table needs raising later.
+---
+apiVersion: v1
+kind: Namespace
+metadata: { name: gpu-test, labels: { gvisor: "" } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: slice-density
+  namespace: gpu-test
+spec:
+  replicas: 10            # scale this up in the ramp
+  selector: { matchLabels: { app: slice-density } }
+  template:
+    metadata:
+      labels: { app: slice-density }
+      annotations:
+        # All replicas onto ONE physical card, so we measure a single GPU's
+        # density (and give that card the node's full 256-slot table budget).
+        nvidia.com/use-gpuuuid: "GPU-REPLACE-WITH-TARGET-UUID"
+    spec:
+      runtimeClassName: gvisor
+      schedulerName: hami-scheduler
+      # nodeName: midori-nv-1          # pin to the cordoned test node
+      nodeSelector: { gpu.vendor: nvidia }
+      restartPolicy: Always
+      containers:
+        - name: slice
+          image: docker.io/pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime
+          # Minimal persistent context: a tiny tensor + a trivial kernel loop,
+          # so a real CUDA context and its channel groups exist and stay up.
+          command: ["python", "-c", "import torch,time; x=torch.zeros(1<<20, device=0); i=0\nwhile True:\n x.add_(1.0); torch.cuda.synchronize(); i+=1; time.sleep(0.1)"]
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+              nvidia.com/gpumem: 700        # MiB: ~CUDA context overhead + tiny data (the real floor)
+              nvidia.com/gpucores: 0        # compute left to the broker's weights, not HAMi
+              cpu: 250m
+              memory: 512Mi                 # host RAM per sandbox — 100 pods ≈ 50 GiB + Sentry overhead
