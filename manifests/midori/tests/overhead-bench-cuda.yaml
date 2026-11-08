@@ -1,0 +1,42 @@
+# Lean-container variant of overhead-bench: registry.midori/cudabench:1 (a static
+# CUDA FMA binary, no pytorch) instead of the ~690 MiB pytorch image. Same
+# deployment name + TFLOPS output, so collect-overhead.sh works unchanged.
+# gpumem/memory are PROVISIONAL — set from the N=1 measurement, then push density
+# (the lean container should fit far more slices/GPU, maybe enough to reach the
+# 256 broker table). Pinned to one GPU on nv-1 for a per-GPU measurement.
+---
+apiVersion: v1
+kind: Namespace
+metadata: { name: gpu-test, labels: { gvisor: "" } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: overhead-bench
+  namespace: gpu-test
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: overhead-bench } }
+  template:
+    metadata:
+      labels: { app: overhead-bench }
+      annotations:
+        nvidia.com/use-gpuuuid: "GPU-<target-gpu-uuid>"
+    spec:
+      runtimeClassName: gvisor
+      schedulerName: hami-scheduler
+      nodeSelector: { gpu.vendor: nvidia, kubernetes.io/hostname: REPLACE-WITH-TEST-NODE }
+      tolerations:
+        - { key: slice-test, operator: Exists, effect: NoSchedule }
+      restartPolicy: Always
+      containers:
+        - name: bench
+          image: registry.midori/cudabench:1   # ENTRYPOINT is /bench; no command needed
+          imagePullPolicy: IfNotPresent         # use the image imported into nv-1's containerd
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+              nvidia.com/gpumem: 350     # measured context ~274 MiB; 350 fits ~130/GPU logically
+              nvidia.com/gpucores: 1
+              cpu: 100m                  # 80*100m=8 cores fits nv-1
+              memory: 160Mi              # measured working set ~65 MiB

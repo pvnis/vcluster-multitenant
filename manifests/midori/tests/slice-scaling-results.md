@@ -28,13 +28,27 @@ Two measurements on **one RTX A6000 (midori-nv-1)** under gVisor + HAMi + the
   of real VRAM (context ~600–800 + buffers), so **~45 slices/GPU** at
   `gpumem:950` (45 of 48 fit; 3 couldn't).
 - **The 256-entry broker group table (`g_ghostGroups[256]`, node-wide) never
-  bound** — `table_full` stayed 0 through every run, including a **node-wide test
-  at 58 live contexts** (26 + 32 across both A6000s; ~232 group slots, still under
-  256). Every configuration is capped by a *host* limit first: CPU (~36 at
-  `cpu:250m`, ~45 at 200m), VRAM (~45/GPU), RAM, and kubelet **max-pods=110**
-  (~58 node-wide). **The 256 table is not a practical constraint on this
-  hardware — you exhaust host resources at a few dozen slices long before it.**
-  It would only bind on a host able to run 60+ contexts, which an A6000 VM can't.
+  bound** — `table_full` stayed 0 through every run. Each config is capped by a
+  *host* limit first: CPU (~36 at `cpu:250m`, ~45 at 200m), VRAM (~45/GPU with
+  pytorch), RAM, kubelet **max-pods=110** (~58 node-wide). We then removed those
+  limits one at a time to chase the table (see "Reaching the table" below) and
+  still never hit it. **The 256 table holds more contexts than an A6000 node can
+  run — it is never the binding constraint; host capacity always is.**
+
+## Reaching the table: the lean container
+
+The pytorch container (~690 MiB host, ~1 GiB VRAM/context) capped a card at ~45
+contexts. To get into the table's regime we replaced it with a tiny static CUDA
+FMA binary (`cudabench/`, ~250 MiB image): **measured 65 MiB host and 274 MiB
+VRAM per context** — lifting the per-GPU VRAM ceiling from ~45 to **~168**. With
+that plus kubelet **max-pods raised to 200**, we reached **91 contexts on one
+GPU — and `table_full` was still 0** (so ~2–3 group slots/context; the table's
+threshold is ~90–128 contexts). At 91 the node thrashes (162 pods, node-exporter
+unscrapable, pods stuck Pending) and can't run more. So the table holds **≥91
+contexts/GPU** — more than the node can sustain. Note: cudabench's FMA kernel is
+latency-bound (~5 TFLOPS, not GPU-saturating), so it is a valid density/table
+probe but **not** an overhead load — the overhead curve above stops at ~45
+(pytorch's reach).
 
 ## Overhead — what time-slicing costs vs. slice count
 
