@@ -1,0 +1,63 @@
+# GHOST-scheduling overhead vs. number of slices.
+#
+# N compute-bound, EQUAL-WEIGHT slices saturate ONE GPU; we sweep N and measure:
+#   - throughput tax:  overhead(N) = 1 - R(N)/R(1),  R(N) = sum of all slices'
+#                      TFLOPS (each pod prints "TFLOPS=<x>"). Ideal time-slicing
+#                      keeps R(N) ~= R(1); the shortfall is the broker switch cost.
+#   - control cost:    rate(gpusched_cmds_ok_total{nv-1}) vs N (broker work).
+#
+# Equal weight (same gpucores) so we measure pure overhead, not weight skew.
+# Compute-bound (fma) so the broker actually time-slices contended contexts —
+# unlike the slice-density probe, whose idle kernel never contends.
+#
+# PREREQS (already in place from the density run): nv-1 tainted slice-test +
+# uncordoned, HAMi devicesplitcount=128 on nv-1 (advertises 256), ns gpu-test.
+# First TEAR DOWN the density pods so they don't interfere:
+#   kubectl -n gpu-test delete deploy slice-density
+#
+# RUN
+#   kubectl apply -f ~/vcluster-multitenant/manifests/midori/tests/overhead-bench.yaml
+#   # confirm N=1 runs (not OOM) and learn gpuloop's output format first:
+#   kubectl -n gpu-test logs -l app=overhead-bench --tail=5
+#   # then sweep (collect-overhead.sh, provided after we calibrate the log parse)
+#
+# gpumem 1500 covers ~CUDA context (~600) + fma buffers; 46068/1500 ~= 30, so
+# the sweep tops out ~N=28. If N=1 OOMs, raise gpumem (and the sweep ceiling drops).
+---
+apiVersion: v1
+kind: Namespace
+metadata: { name: gpu-test, labels: { gvisor: "" } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: overhead-bench
+  namespace: gpu-test
+spec:
+  replicas: 1            # swept: 1,2,4,8,16,24,32,48 (gpumem 950 fits 48/GPU; 850Mi RAM fits 48)
+  selector: { matchLabels: { app: overhead-bench } }
+  template:
+    metadata:
+      labels: { app: overhead-bench }
+      annotations:
+        nvidia.com/use-gpuuuid: "GPU-<target-gpu-uuid>"   # one physical GPU on the test node
+    spec:
+      runtimeClassName: gvisor
+      schedulerName: hami-scheduler
+      nodeSelector: { gpu.vendor: nvidia, kubernetes.io/hostname: <target-node> }
+      tolerations:
+        - { key: slice-test, operator: Exists, effect: NoSchedule }
+      restartPolicy: Always
+      containers:
+        - name: bench
+          image: docker.io/pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime
+          # Sustained cuBLAS fp16 matmul loop (compute-bound, tensor cores).
+          # Prints "TFLOPS=<x>" every ~100 matmuls — the throughput we sum.
+          command: ["python","-c","import torch,time\nM=4096\na=torch.randn(M,M,device=0,dtype=torch.float16)\nb=torch.randn(M,M,device=0,dtype=torch.float16)\nc=torch.empty(M,M,device=0,dtype=torch.float16)\nflop=2*M**3\ntorch.mm(a,b,out=c);torch.cuda.synchronize()\nn=0;t=time.time()\nwhile True:\n torch.mm(a,b,out=c);n+=1\n if n%50==0 and time.time()-t>=2.0:\n  torch.cuda.synchronize();dt=time.time()-t;print('TFLOPS=%.1f'%(flop*n/dt/1e12),flush=True);t=time.time();n=0"]
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+              nvidia.com/gpumem: 950     # MiB: 48*950=45600 < 46068, so 48 fit one card; still > context+buffers
+              nvidia.com/gpucores: 1     # EQUAL across slices → equal weight
+              cpu: 200m
+              memory: 850Mi              # measured working set ~690 MiB; 850Mi fits 48 on nv-1's RAM

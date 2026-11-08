@@ -64,12 +64,16 @@ spec:
       annotations:
         # All replicas onto ONE physical card, so we measure a single GPU's
         # density (and give that card the node's full 256-slot table budget).
-        nvidia.com/use-gpuuuid: "GPU-REPLACE-WITH-TARGET-UUID"
+        nvidia.com/use-gpuuuid: "GPU-<target-gpu-uuid>"
     spec:
       runtimeClassName: gvisor
       schedulerName: hami-scheduler
-      # nodeName: midori-nv-1          # pin to the cordoned test node
-      nodeSelector: { gpu.vendor: nvidia }
+      # NOT nodeName — HAMi's webhook rejects a pre-assigned node (it must
+      # schedule the pod itself). Force nv-1 via hostname + tolerate the test
+      # taint (see header: taint nv-1 and uncordon it instead of cordoning).
+      nodeSelector: { gpu.vendor: nvidia, kubernetes.io/hostname: <target-node> }
+      tolerations:
+        - { key: slice-test, operator: Exists, effect: NoSchedule }
       restartPolicy: Always
       containers:
         - name: slice
