@@ -1,0 +1,50 @@
+# Node-wide variant of overhead-bench: NO use-gpuuuid, so HAMi spreads slices
+# across BOTH of nv-1's A6000s. Purpose: reach 48 and 64 *node-wide* contexts —
+# impossible on one card (~45 VRAM ceiling) — and finally stress the NODE-WIDE
+# 256-entry broker group table (g_ghostGroups[256]). 64 contexts x ~4-5 group
+# slots each approaches 256, the one regime the single-GPU runs never hit.
+#
+# Deployment name is "overhead-bench" so collect-overhead.sh works unchanged:
+#   kubectl apply -f overhead-bench-node.yaml
+#   bash collect-overhead.sh 48 64      # per-slice TFLOPS tracks per-GPU load
+# Watch (the headline): gpusched_table_full_total on nv-1 MUST stay 0;
+# gpusched_sandboxes per GPU shows the binpack split (one card fills to ~45 first).
+#
+# Host RAM caps node-wide density on nv-1 (~63 GiB): memory 768Mi (actual ~690)
+# lets 64 fit (64*768 ~= 48 GiB + baseline). gpumem 950 binpacks ~48/card.
+# Set <target-node> to the drained+tainted test node before applying.
+---
+apiVersion: v1
+kind: Namespace
+metadata: { name: gpu-test, labels: { gvisor: "" } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: overhead-bench
+  namespace: gpu-test
+spec:
+  replicas: 1            # swept node-wide: 48, 64 (across both GPUs)
+  selector: { matchLabels: { app: overhead-bench } }
+  template:
+    metadata:
+      labels: { app: overhead-bench }
+      # NO nvidia.com/use-gpuuuid — HAMi places across both GPUs on the node.
+    spec:
+      runtimeClassName: gvisor
+      schedulerName: hami-scheduler
+      nodeSelector: { gpu.vendor: nvidia, kubernetes.io/hostname: REPLACE-WITH-TEST-NODE }
+      tolerations:
+        - { key: slice-test, operator: Exists, effect: NoSchedule }
+      restartPolicy: Always
+      containers:
+        - name: bench
+          image: docker.io/pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime
+          command: ["python","-c","import torch,time\nM=4096\na=torch.randn(M,M,device=0,dtype=torch.float16)\nb=torch.randn(M,M,device=0,dtype=torch.float16)\nc=torch.empty(M,M,device=0,dtype=torch.float16)\nflop=2*M**3\ntorch.mm(a,b,out=c);torch.cuda.synchronize()\nn=0;t=time.time()\nwhile True:\n torch.mm(a,b,out=c);n+=1\n if n%50==0 and time.time()-t>=2.0:\n  torch.cuda.synchronize();dt=time.time()-t;print('TFLOPS=%.1f'%(flop*n/dt/1e12),flush=True);t=time.time();n=0"]
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+              nvidia.com/gpumem: 950     # binpacks ~48/card; 64 spill to the 2nd GPU
+              nvidia.com/gpucores: 1
+              cpu: 100m                  # 64*100m=6.4 cores fits nv-1's free CPU (200m capped at ~45)
+              memory: 768Mi              # actual ~690; lets 64 fit nv-1's RAM
