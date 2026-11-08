@@ -44,7 +44,7 @@ for N in ${@:-1 2 4 8 16}; do
   done
   echo "  $(running_pods | wc -l)/$N running; warmup 45s"; sleep 45
   raw=$OUT/raw-$N.txt; : > "$raw"
-  for k in $(seq 1 10); do echo "$(sum_tflops)" >> "$raw"; sleep 3; done   # ~30s of samples
+  for k in $(seq 1 15); do echo "$(sum_tflops)" >> "$raw"; sleep 4; done   # ~60s of samples (spans several 10s windows)
   med=$(python3 -c "import statistics as s;xs=[float(x) for x in open('$raw') if x.strip()];print(round(s.median(xs),1))")
   per=$(python3 -c "print(round($med/$N,1))")
   bc=$(broker_cmds)

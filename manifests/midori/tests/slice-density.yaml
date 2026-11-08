@@ -71,7 +71,7 @@ spec:
       # NOT nodeName — HAMi's webhook rejects a pre-assigned node (it must
       # schedule the pod itself). Force nv-1 via hostname + tolerate the test
       # taint (see header: taint nv-1 and uncordon it instead of cordoning).
-      nodeSelector: { gpu.vendor: nvidia, kubernetes.io/hostname: <target-node> }
+      nodeSelector: { gpu.vendor: nvidia, kubernetes.io/hostname: REPLACE-WITH-TEST-NODE }
       tolerations:
         - { key: slice-test, operator: Exists, effect: NoSchedule }
       restartPolicy: Always

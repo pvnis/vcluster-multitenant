@@ -42,31 +42,32 @@ Two measurements on **one RTX A6000 (midori-nv-1)** under gVisor + HAMi + the
 | 8  | 101.4 | 4.5% | 12.7  | 96% | 8  |
 | 16 | 101.6 | 4.3% | 6.3   | 95% | 34 |
 | 24 | 100.3 | 5.6% | 4.2   | 95% | 51 |
-| 32 | 98.0  | 7.7% | 3.1   | 93% | 68 |
-| ~45 | (invalid) | — | — | — | 96 |
+| 32 | 98–99.6 | ~7% | 3.1 | 93% | 68 |
+| ~45 ("48") | 99.3 | 6.5% | 2.2 | 94% | 96 |
 
 \* the N=4 broker sample (45.8) was a scale-up transient; ignore.
 
 **Findings**
 1. **Flat ~4% through 16 slices** — aggregate throughput holds ~101–102 TFLOPS;
    the tax is independent of N in this range.
-2. **Smooth ramp past 16** — 4.3% → 5.6% → 7.7% across 16 → 24 → 32, about
-   +0.2%/slice. A gentle linear climb, **not** a step and **not** a runaway.
+2. **Ramp then plateau** — 4.3% (16) → 5.6% (24) → ~7% (32), then **flat at ~7%
+   through 45** (the per-GPU ceiling). The tax rises once past ~16 and then
+   **saturates** — it does not keep climbing with density, and it never exceeds
+   ~7% even at max slices.
 3. **Fair** — each slice gets ≥93% of its ideal `R(1)/N`; the tax is spread
    evenly (equal weights → equal slices).
 4. **Broker control cost is linear in N** — ~2 cmds/s per slice (8→34→51→68→96
-   for 8→16→24→32→45). This is the reliable high-N signal and it tracks the
-   throughput ramp.
+   for 8→16→24→32→45), even while the throughput tax saturates.
 5. **Per-GPU ceiling ~45 slices** on an A6000 (VRAM/context floor ~950 MiB/slice).
 
 ## Measurement limits (read before trusting high-N)
 
-- **The Σ-per-slice-TFLOPS method breaks down beyond ~32 contexts.** It sums
-  non-contemporaneous 2 s windows read sequentially; at high per-slice variance
-  the sum can exceed solo throughput (R at ~45 measured **98.4 and 111.3** on two
-  tries — 111.3 is physically impossible on one GPU). So **throughput overhead
-  >32 is not cleanly quantified here**; the linear broker-rate is the trustworthy
-  high-N indicator. A future run should use 5–10 s per-slice windows.
+- **High-N needs a long collection window.** The Σ-per-slice-TFLOPS method sums
+  per-slice windows read sequentially; a short (30 s / 10-sample) collection
+  summed non-contemporaneous windows and at ~45 contexts over-counted — R read
+  **98.4 and 111.3** on two tries (111.3 is impossible on one GPU). A **60 s /
+  15-sample median** resolved it (R≈99.3 at 45, stable and physical), so the
+  high-N points here are clean. Watch for this when sampling many bursty slices.
 - **Compute-bound, big-kernel favorable** (M=4096 → long time-slices, few
   switches). Launch-heavy or latency-sensitive workloads would show more.
 - The ~4–8% **bundles the broker time-slicing and the gVisor/nvproxy path**; no
@@ -75,8 +76,9 @@ Two measurements on **one RTX A6000 (midori-nv-1)** under gVisor + HAMi + the
 
 ## Implications for the "100 slices" target
 
-- **Scheduling overhead does not explode** — flat to 16, linear ramp to ~8% by
-  32, broker cost linear in N. The scheduler is not the barrier to density.
+- **Scheduling overhead saturates, it does not explode** — flat ~4% to 16, ramps
+  to ~7% by 32, then **plateaus at ~7% through the ~45-slice ceiling**. Even at
+  max density on an A6000 you pay only ~7%. The scheduler is not the barrier.
 - **The barrier is host resources:** ~45 slices/GPU on an A6000 (VRAM), fewer if
   CPU-starved. **100 slices needs big-VRAM cards (B300-class) and fatter hosts**,
   where the tax would be proportionally larger but still bounded.

@@ -44,7 +44,7 @@ spec:
     spec:
       runtimeClassName: gvisor
       schedulerName: hami-scheduler
-      nodeSelector: { gpu.vendor: nvidia, kubernetes.io/hostname: <target-node> }
+      nodeSelector: { gpu.vendor: nvidia, kubernetes.io/hostname: REPLACE-WITH-TEST-NODE }
       tolerations:
         - { key: slice-test, operator: Exists, effect: NoSchedule }
       restartPolicy: Always
