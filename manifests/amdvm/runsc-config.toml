@@ -1,0 +1,12 @@
+# AMD node (2x MI355X), systrap platform. systrap can map /dev/kfd only because
+# the host runs the modified amdgpu driver (pvnis/amdgpu kfd-mmap, DKMS
+# amdgpu/7.1.9.kfdmmap) with AMDKFD_IOC_SET_MMAP_TARGET.
+# Flags MUST stay under [runsc_config] or the shim drops them silently.
+log_level = "info"
+[runsc_config]
+  platform = "systrap"
+  amdproxy = "true"
+  amdproxy-gpu-scheduler-socket = "/run/runsc-gpu-scheduler.sock"
+  amdproxy-gpu-weight = "100"        # node ceiling; the webhook lowers it per pod
+  # No node-wide amdproxy-gpu-memory-limit: a whole-GPU pod gets the whole card.
+  debug-log = "/var/log/runsc/%ID%/"

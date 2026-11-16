@@ -1,0 +1,22 @@
+# The same vecadd check, from INSIDE a tenant (apply with the tenant's
+# kubeconfig). Tenants are PSA baseline, so no hostPath: the image carries the
+# binary and its ROCm library closure (localhost/gpu-vecadd:gfx950, built with
+# crane from manifests/amdvm/vecadd.hip and imported with k3s ctr).
+# The syncer forces runtimeClassName gvisor; the host-side webhook turns the
+# 8-unit request into a 4 GiB amdproxy memory limit and weight 8.
+apiVersion: v1
+kind: Pod
+metadata: { name: vecadd }
+spec:
+  restartPolicy: Never
+  containers:
+  - name: vecadd
+    image: localhost/gpu-vecadd:gfx950-2
+    imagePullPolicy: Never
+    command: ["/opt/gputest/vecadd", "1024", "20000"]
+    env:
+    - { name: LD_LIBRARY_PATH, value: "/opt/gputest/lib" }
+    - { name: HSA_USERPTR_FOR_PAGED_MEM, value: "0" }
+    resources:
+      limits: { amd.com/gpu-vram-mib: "8", cpu: "2", memory: 4Gi }
+      requests: { amd.com/gpu-vram-mib: "8", cpu: "1", memory: 2Gi }

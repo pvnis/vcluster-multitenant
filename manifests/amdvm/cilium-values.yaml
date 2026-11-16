@@ -1,0 +1,25 @@
+# Cilium for the single-node AMD VM (k3s server + GPU node in one).
+# Derived from ../midori/cilium-values.yaml; differences: one node, so the API
+# is reached on loopback (the VM's DHCP address changes when it is re-created) and one
+# operator replica; no ServiceMonitors (no Prometheus
+# operator here).
+k8sServiceHost: "127.0.0.1"   # the node itself; independent of its DHCP address
+k8sServicePort: 6443
+kubeProxyReplacement: true
+# Load-bearing for gVisor: with Full socket LB, no runsc pod reaches a
+# ClusterIP. Verify: cilium-dbg status --verbose | grep "Socket LB Coverage"
+# must read Hostns-only.
+socketLB:
+  hostNamespaceOnly: true
+ipam:
+  mode: kubernetes
+cni:
+  binPath: /var/lib/rancher/k3s/data/cni
+  confPath: /var/lib/rancher/k3s/agent/etc/cni/net.d
+hubble:
+  relay:
+    enabled: true
+  ui:
+    enabled: false
+operator:
+  replicas: 1

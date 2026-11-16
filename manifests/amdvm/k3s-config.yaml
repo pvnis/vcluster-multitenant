@@ -1,0 +1,11 @@
+# Single-node AMD GPU cluster (this VM is server + GPU node). No node-ip or
+# tls-san: the VM gets its address by DHCP and it changes when the VM is
+# re-created, so k3s detects it and adds it to the serving certificate.
+flannel-backend: none
+disable-network-policy: true
+disable-kube-proxy: true
+disable: [servicelb, traefik]
+node-label:
+  - gpu.vendor=amd
+  - gpu=on
+write-kubeconfig-mode: "0644"

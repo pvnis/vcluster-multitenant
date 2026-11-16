@@ -1,0 +1,27 @@
+# End-to-end AMD check under gVisor (systrap + modified amdgpu driver):
+# a kernel launch needs the doorbell/MMIO mmaps that only work with
+# AMDKFD_IOC_SET_MMAP_TARGET. Host-admin test; the binary and ROCm come from
+# the host (/opt/gputest built from ~/build/gputest/vecadd.hip, /opt/rocm).
+# 8 units -> the webhook sets amdproxy-gpu-memory-limit = 4 GiB, weight 8.
+apiVersion: v1
+kind: Pod
+metadata: { name: vecadd, namespace: gpu-test }
+spec:
+  runtimeClassName: gvisor
+  restartPolicy: Never
+  containers:
+  - name: vecadd
+    image: docker.io/library/ubuntu:24.04
+    command: ["/opt/gputest/vecadd", "512"]
+    env:
+    - { name: LD_LIBRARY_PATH, value: "/opt/gputest/lib:/opt/rocm/lib" }
+    - { name: HSA_USERPTR_FOR_PAGED_MEM, value: "0" }
+    resources:
+      limits: { amd.com/gpu-vram-mib: "8" }
+      requests: { amd.com/gpu-vram-mib: "8" }
+    volumeMounts:
+    - { name: gputest, mountPath: /opt/gputest, readOnly: true }
+    - { name: rocm, mountPath: /opt/rocm, readOnly: true }
+  volumes:
+  - { name: gputest, hostPath: { path: /opt/gputest, type: Directory } }
+  - { name: rocm, hostPath: { path: /opt/rocm-7.2.4, type: Directory } }

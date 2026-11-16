@@ -1,0 +1,29 @@
+# Host-side quota for an AMD tenant on the amdvm node (2x MI355X, 288 GiB each,
+# 32 vCPU, 125 GiB RAM). ../tenant-quota.yaml explains every axis; this is that
+# file for AMD, where the device plugin advertises amd.com/gpu-vram-mib in
+# 512-MiB units (576 per card). Parameterised:
+#   sed -e s/NAMESPACE/tenant-amd-a/ -e s/VRAM/576/ tenant-quota.yaml | kubectl apply -f -
+# The quota is what bounds a tenant's GPU share host-side; the webhook turns
+# each pod's request into dev.gvisor.flag.amdproxy-* annotations and the Sentry
+# enforces them.
+apiVersion: v1
+kind: ResourceQuota
+metadata: { name: tenant-quota, namespace: NAMESPACE }
+spec:
+  hard:
+    requests.amd.com/gpu-vram-mib: "VRAM"
+    requests.cpu: "12"
+    requests.memory: 48Gi
+    limits.cpu: "16"
+    limits.memory: 56Gi
+    pods: "30"
+    persistentvolumeclaims: "10"
+---
+apiVersion: v1
+kind: LimitRange
+metadata: { name: tenant-defaults, namespace: NAMESPACE }
+spec:
+  limits:
+  - type: Container
+    default: { cpu: "1", memory: 2Gi }
+    defaultRequest: { cpu: 100m, memory: 256Mi }
