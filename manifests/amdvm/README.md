@@ -57,5 +57,8 @@ flag the import is silently filtered out).
   the case that crashed the unpatched driver.
 - `../../test-isolation.sh` with the tenant names substituted: 10/10.
 
-Open: a second GPU process in the same sandbox, after the first exits, sees
-"no ROCm-capable device".
+- GPU programs run one after another in one pod each get the GPU and the
+  full quota (pvnis/gvisor gpuslicing `bb6b53408`): amdproxy gives back what
+  an exited program held and lets the next take its address space over.
+  Programs running at the same time in one pod still need the
+  `dev.gvisor.flag.amdproxy-share-kfd-vm: "true"` annotation.
