@@ -1,0 +1,22 @@
+# Smoke test for dynamic provisioning: a PVC + a pod that writes/reads a file.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: cephfs-test, namespace: default }
+spec:
+  accessModes: [ReadWriteMany]              # CephFS supports RWX
+  storageClassName: cephfs
+  resources: { requests: { storage: 1Gi } }
+---
+apiVersion: v1
+kind: Pod
+metadata: { name: cephfs-test, namespace: default }
+spec:
+  restartPolicy: Never
+  containers:
+    - name: t
+      image: busybox:1.36
+      command: ["sh","-c","echo hello-cephfs > /mnt/t.txt && cat /mnt/t.txt && ls -l /mnt && sleep 3600"]
+      volumeMounts: [{ name: v, mountPath: /mnt }]
+  volumes:
+    - name: v
+      persistentVolumeClaim: { claimName: cephfs-test }

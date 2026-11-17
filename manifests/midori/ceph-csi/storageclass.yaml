@@ -1,0 +1,20 @@
+# Dynamic CephFS provisioning (Option A). Needs client.midori to have mgr/subvol
+# caps; if it only has data-path caps, use static-pv.yaml instead.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: cephfs
+provisioner: cephfs.csi.ceph.com
+parameters:
+  clusterID: "<CEPH_CLUSTER_ID>"            # must match values.yaml csiConfig
+  fsName: cephfs
+  # subvolumes land under /volumes/<group>/; client.midori has rw on /volumes
+  # volumeNamePrefix: midori-
+  csi.storage.k8s.io/provisioner-secret-name: csi-cephfs-secret
+  csi.storage.k8s.io/provisioner-secret-namespace: ceph-csi
+  csi.storage.k8s.io/controller-expand-secret-name: csi-cephfs-secret
+  csi.storage.k8s.io/controller-expand-secret-namespace: ceph-csi
+  csi.storage.k8s.io/node-stage-secret-name: csi-cephfs-secret
+  csi.storage.k8s.io/node-stage-secret-namespace: ceph-csi
+reclaimPolicy: Delete
+allowVolumeExpansion: true

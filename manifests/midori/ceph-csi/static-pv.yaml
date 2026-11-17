@@ -1,0 +1,31 @@
+# Static CephFS volume (Option B) — mount an EXISTING path, no subvolume creation,
+# so only the data-path caps the gist grants (rw on /volumes) are needed.
+# Pre-create the path on the Ceph side (or reuse one), then fill <ROOT_PATH> and
+# <CEPH_CLUSTER_ID>. volumeHandle must be unique.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: cephfs-static-shared
+spec:
+  accessModes: [ReadWriteMany]
+  capacity: { storage: 100Gi }             # informational for static CephFS
+  storageClassName: ""                      # static, no provisioner
+  persistentVolumeReclaimPolicy: Retain
+  csi:
+    driver: cephfs.csi.ceph.com
+    volumeHandle: cephfs-static-shared      # any unique string
+    volumeAttributes:
+      clusterID: "<CEPH_CLUSTER_ID>"
+      fsName: cephfs
+      staticVolume: "true"
+      rootPath: "<ROOT_PATH>"               # e.g. /volumes/midori/shared
+    nodeStageSecretRef: { name: csi-cephfs-secret, namespace: ceph-csi }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: cephfs-static-shared, namespace: default }
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: ""
+  volumeName: cephfs-static-shared
+  resources: { requests: { storage: 100Gi } }

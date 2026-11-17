@@ -1,0 +1,22 @@
+# helm values for ceph-csi-cephfs (external TYO Ceph). Secret + StorageClass are
+# created separately (keep the key out of helm/git). Fill <CEPH_CLUSTER_ID>.
+csiConfig:
+  - clusterID: "<CEPH_CLUSTER_ID>"          # Ceph fsid, or any id matching storageclass.yaml
+    monitors:
+      - "10.33.0.61:6789"
+      - "10.33.0.62:6789"
+      - "10.33.0.63:6789"
+
+storageClass:
+  create: false          # we define it in storageclass.yaml
+secret:
+  create: false          # created with `kubectl create secret` (see README)
+
+provisioner:
+  replicaCount: 2        # 3 control planes, 2 is safe
+
+# The nodeplugin mounts CephFS on each node and must run wherever CephFS-consuming
+# pods land (incl. control-plane / vcluster nodes), so tolerate everything.
+nodeplugin:
+  tolerations:
+    - operator: Exists
