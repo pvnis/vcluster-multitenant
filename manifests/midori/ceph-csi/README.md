@@ -5,15 +5,43 @@ PVs, backed by the **external** Ceph at `10.33.0.0/24` (mons `.61/.62/.63`),
 reached over the fabric storage VPC (`enp5s0.108` → `10.33.0.0/24 via 10.100.2.2`,
 already up on all nodes). CephFS gives **ReadWriteMany**.
 
-## What I still need from you
-- **`client.midori` key** — create the Secret yourself (keep it out of git).
-- **clusterID** — the Ceph `fsid` (preferred) or any consistent string; must match
-  in `values.yaml` and `storageclass.yaml`. (`ceph fsid` on a storage host / in
-  `ceph.conf`.)
-- **client caps** — does `client.midori` have **mgr/subvolume** caps (then dynamic
-  provisioning works), or only the data-path `rw on /volumes` from the gist (then
-  use the **static PV** path below)? If unsure, try dynamic; if the provisioner
-  errors with a permissions/mgr error, fall back to static.
+## Status — 2026-11-17
+- **Driver deployed & healthy:** `ceph-csi-cephfs` 3.18.2 (helm release in ns
+  `ceph-csi`), provisioner ×2 + nodeplugin on all 7 nodes. clusterID `tyo-ceph`,
+  mons `.61/.62/.63`. StorageClass `cephfs` applied.
+- **Dynamic provisioning blocked on Ceph caps.** The smoke-test PVC failed with
+  `rados: ret=-1, Operation not permitted` — `client.midori` can mount CephFS but
+  lacks the **mgr/subvolume** caps to *create* subvolumes (data-path caps only,
+  as the gist implied). Decision (user, 2026-11-17): get the caps (go dynamic),
+  not static.
+
+## Grant the CSI caps (storage team) — then dynamic works
+Create a **dedicated** CSI client (don't mutate `client.midori`, which Manila /
+the test VM also use; `ceph auth caps` *replaces* caps). Run on a Ceph host
+(needs Ceph admin). Defaults match our StorageClass: fs `cephfs`, subvolumegroup
+`csi` (ceph-csi auto-creates the group):
+```bash
+ceph auth get-or-create client.midori-csi \
+  mgr "allow rw" \
+  osd "allow rwx tag cephfs metadata=cephfs, allow rw tag cephfs data=cephfs" \
+  mds "allow r fsname=cephfs path=/volumes, allow rws fsname=cephfs path=/volumes/csi" \
+  mon "allow r fsname=cephfs"
+# prints the key for client.midori-csi
+```
+Then point the k8s Secret at the new client (keys stay out of git):
+```bash
+kubectl -n ceph-csi delete secret csi-cephfs-secret
+kubectl -n ceph-csi create secret generic csi-cephfs-secret \
+  --from-literal=userID=midori-csi  --from-literal=userKey='<NEW_KEY>' \
+  --from-literal=adminID=midori-csi --from-literal=adminKey='<NEW_KEY>'
+```
+No helm/StorageClass change needed — re-run the smoke test (Option A) and the PVC
+binds. (`client.midori` with its data caps stays usable for the static path below
+if ever wanted.)
+
+### clusterID note
+`tyo-ceph` is just the config key shared by `values.yaml` and `storageclass.yaml`;
+it need not be the Ceph `fsid`. Leave it as-is.
 
 ## Deploy the driver
 ```bash
