@@ -14,7 +14,13 @@
 # same file to cp-1/cp-2/eye-0, and to amd-0 and nv-0/nv-1 once their vNIC is
 # attached / they rejoin.
 #
-# FILL ONLY <OCTET> — this node's host number, SAME on all three VLANs (cp-0 = 7).
+# FILL ONLY <OCTET> — this node's host number, SAME on all three VLANs:
+#   cp-0=100  cp-1=101  cp-2=102   nv-0=110  nv-1=111   amd-0=120
+#   (eye-0: NOT yet assigned — it has enp5s0 attached; give it an octet or confirm
+#    it's not joining the fabric.)
+#   NOTE: the fabric listed cp-0 as a BGP neighbor at 10.100.0.7; with this scheme
+#   cp-0 is .100, so the fabric's neighbor entry must be updated to 10.100.0.100 or
+#   the iBGP session won't establish.
 # Avoid reserved addresses: .1 on midori-bgp (router0) and .2 on midori-storage
 # (the storage gateway). Everything else is resolved: MTU 9000 (jumbo), and the
 # Ceph network 10.33.0.0/24 (mons 10.33.0.61-63) reached via 10.100.2.2.
