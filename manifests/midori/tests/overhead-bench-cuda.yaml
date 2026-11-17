@@ -21,17 +21,17 @@ spec:
     metadata:
       labels: { app: overhead-bench }
       annotations:
-        nvidia.com/use-gpuuuid: "GPU-<target-gpu-uuid>"
+        nvidia.com/use-gpuuuid: "GPU-a12967ad-3cd4-37a4-fa31-614686b21c10"
     spec:
       runtimeClassName: gvisor
       schedulerName: hami-scheduler
-      nodeSelector: { gpu.vendor: nvidia, kubernetes.io/hostname: REPLACE-WITH-TEST-NODE }
+      nodeSelector: { gpu.vendor: nvidia, kubernetes.io/hostname: midori-nv-1 }
       tolerations:
         - { key: slice-test, operator: Exists, effect: NoSchedule }
       restartPolicy: Always
       containers:
         - name: bench
-          image: registry.midori/cudabench:1   # ENTRYPOINT is /bench; no command needed
+          image: registry.midori/cudabench:2   # compute-bound FMA (8 chains); ENTRYPOINT runs it
           imagePullPolicy: IfNotPresent         # use the image imported into nv-1's containerd
           resources:
             limits:

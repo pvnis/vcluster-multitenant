@@ -15,9 +15,7 @@
 # attached / they rejoin.
 #
 # FILL ONLY <OCTET> — this node's host number, SAME on all three VLANs:
-#   cp-0=100  cp-1=101  cp-2=102   nv-0=110  nv-1=111   amd-0=120
-#   (eye-0: NOT yet assigned — it has enp5s0 attached; give it an octet or confirm
-#    it's not joining the fabric.)
+#   cp-0=100  cp-1=101  cp-2=102   eye-0=10   nv-0=110  nv-1=111   amd-0=120
 #   NOTE: the fabric listed cp-0 as a BGP neighbor at 10.100.0.7; with this scheme
 #   cp-0 is .100, so the fabric's neighbor entry must be updated to 10.100.0.100 or
 #   the iBGP session won't establish.

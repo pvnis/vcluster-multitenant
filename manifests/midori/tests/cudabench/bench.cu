@@ -9,10 +9,16 @@
 
 __global__ void fma_loop(float* out, int inner) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
-  float a = out[idx], b = 1.00000119f, c = 0.99999881f;
-  #pragma unroll 128
-  for (int i = 0; i < inner; ++i) a = fmaf(a, b, c);
-  out[idx] = a;                 // write-back so the loop isn't optimized away
+  float b = 1.00000119f, c = 0.99999881f;
+  // 8 INDEPENDENT accumulators → enough ILP to hide FMA latency and saturate the
+  // ALUs (a single dependent chain is latency-bound and leaves the GPU ~idle).
+  float a0=out[idx], a1=a0+1, a2=a0+2, a3=a0+3, a4=a0+4, a5=a0+5, a6=a0+6, a7=a0+7;
+  #pragma unroll 32
+  for (int i = 0; i < inner; ++i) {
+    a0=fmaf(a0,b,c); a1=fmaf(a1,b,c); a2=fmaf(a2,b,c); a3=fmaf(a3,b,c);
+    a4=fmaf(a4,b,c); a5=fmaf(a5,b,c); a6=fmaf(a6,b,c); a7=fmaf(a7,b,c);
+  }
+  out[idx] = a0+a1+a2+a3+a4+a5+a6+a7;   // write-back so nothing is optimized away
 }
 
 int main() {
@@ -20,7 +26,7 @@ int main() {
   const int inner = 4096;       // FMAs/thread/launch
   const int threads = 256, blocks = N / threads;
   float* d; cudaMalloc(&d, N * sizeof(float)); cudaMemset(d, 0, N * sizeof(float));
-  const double flop_per_launch = (double)N * inner * 2.0;   // 2 FLOP per FMA
+  const double flop_per_launch = (double)N * inner * 8 * 2.0;   // 8 chains x 2 FLOP/FMA
   long launches = 0;
   auto t = std::chrono::steady_clock::now();
   for (;;) {
