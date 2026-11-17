@@ -1,0 +1,81 @@
+# Cilium BGP + LB-IPAM for the Hedgehog fabric (Cilium v1.19 → BGP v2 API).
+# Peers router0 over the midori-bgp VPC (VLAN 106, 10.100.0.0/24) and advertises
+# LoadBalancer VIPs drawn from the public /26. Node/pod traffic stays on ens3;
+# this only adds the external VIP path.
+#
+# PREREQS:
+#  1. Cilium BGP control plane ON (installs these CRDs). In cilium-values.yaml:
+#        bgpControlPlane: { enabled: true }
+#     then: helm upgrade … && kubectl rollout restart ds/cilium
+#  2. enp5s0.106 up with a 10.100.0.x address on each node (fabric-netplan.yaml).
+#  3. Label the fabric-connected nodes so only they peer (nodes without enp5s0.106
+#     would just flap a down session):
+#        kubectl label node midori-cp-0 midori-cp-1 midori-cp-2 midori-eye-0 \
+#          midori.phoenix/fabric-bgp=true
+#     (add nv-0/nv-1 when they rejoin; amd-0 once its vNIC is attached)
+#
+# FILL: <ROUTER0_ASN> and <ROUTER0_IP> (router0 on 10.100.0.0/24 — likely the VPC
+# gateway, e.g. 10.100.0.1). Cluster ASN is 65254 (per midori_cp0).
+---
+apiVersion: cilium.io/v2
+kind: CiliumBGPClusterConfig
+metadata:
+  name: midori
+spec:
+  nodeSelector:
+    matchLabels:
+      midori.phoenix/fabric-bgp: "true"   # only fabric-connected nodes peer
+  bgpInstances:
+    - name: midori
+      localASN: 65254
+      peers:
+        - name: router0
+          peerASN: <ROUTER0_ASN>
+          peerAddress: <ROUTER0_IP>       # router0 on 10.100.0.0/24
+          peerConfigRef:
+            name: router0
+---
+apiVersion: cilium.io/v2
+kind: CiliumBGPPeerConfig
+metadata:
+  name: router0
+spec:
+  timers: { connectRetryTimeSeconds: 5, holdTimeSeconds: 9, keepAliveTimeSeconds: 3 }
+  gracefulRestart: { enabled: true, restartTimeSeconds: 15 }
+  families:
+    - afi: ipv4
+      safi: unicast
+      advertisements:
+        matchLabels:
+          advertise: midori-vips
+---
+apiVersion: cilium.io/v2
+kind: CiliumBGPAdvertisement
+metadata:
+  name: lb-vips
+  labels:
+    advertise: midori-vips
+spec:
+  advertisements:
+    - advertisementType: Service
+      service:
+        addresses: [ LoadBalancerIP ]     # advertise the LB VIP, not pod/cluster IPs
+      selector:
+        matchExpressions:
+          - { key: io.kubernetes.service.namespace, operator: Exists }   # all Services
+      # Pair each public Service with externalTrafficPolicy: Local so a VIP is only
+      # advertised from nodes that hold a local endpoint (preserves client source IP).
+---
+apiVersion: cilium.io/v2
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: public
+spec:
+  blocks:
+    - cidr: 119.15.113.128/26             # proposed Midori public range — confirm before use
+  serviceSelector:
+    matchExpressions:
+      - { key: midori.phoenix/lb-pool, operator: In, values: ["public"] }
+  # Only Services labelled midori.phoenix/lb-pool=public draw from the public /26,
+  # so a tenant can't grab public space by asking for type=LoadBalancer. This is
+  # where the old Octavia load-balancer-guard intent lands now.

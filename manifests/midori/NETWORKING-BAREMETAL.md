@@ -6,6 +6,37 @@ deployed yet; it is what to build at cutover. Grounded in the cluster as it runs
 today (Cilium v1.19.8, k3s HA, `routing-mode=tunnel/vxlan`, pods `10.42.0.0/16`,
 services `10.43.0.0/16`, nodes `10.30.30.0/24`, public `119.15.113.0/24`).
 
+## As being deployed: the Hedgehog VPC wiring (Nov 2026)
+
+The generic "peer Cilium to OpenWRT" sketch further down is **superseded** by the
+real fabric. The cluster is **not** moving off its VMs yet — instead each VM gets
+a **fabric vNIC (`enp5s0`)**, a trunk into the Hedgehog fabric carrying three
+Midori VPCs. **`ens3` stays the node's primary IP, default route and Cilium
+dataplane** (node-to-node + pod traffic unchanged for now); `enp5s0` only adds the
+external and storage paths.
+
+| VPC | subnet / VLAN | guest subif | role |
+| --- | --- | --- | --- |
+| `midori-bgp` | 10.100.0.0/24, VLAN 106 (→ router0) | `enp5s0.106` | BGP peering + external LB VIPs |
+| `midori-internal` | 10.100.1.0/24, VLAN 107 (no router/peer) | `enp5s0.107` | reserved east-west (idle; `ens3` carries it for now) |
+| `midori-storage` | 10.100.2.0/24, VLAN 108 (peered with `storage`) | `enp5s0.108` | CephFS |
+
+- **Cluster BGP ASN 65254**; nodes peer **router0** over `midori-bgp` (cp-0 =
+  `10.100.0.7`). Cilium advertises LB VIPs from the public **`119.15.113.128/26`**
+  (proposed). Manifests: **`cilium-bgp.yaml`** (BGP v2 + LB-IPAM, router0 ASN/IP to
+  fill) and **`fabric-netplan.yaml`** (one `/etc/netplan/60-fabric.yaml` per node;
+  leaves `ens3` untouched; subinterfaces carry no default route).
+- **Rollout status:** `enp5s0` attached but **down/unconfigured** on cp-0/1/2 +
+  eye-0; **amd-0 still needs the vNIC** (only `ens3` today); **nv-0/nv-1 are down**
+  and reattach when they rejoin.
+- **Open items:** router0's ASN + IP, the `storage` VPC subnet + VLAN-108 gateway,
+  MTU (jumbo?), and confirming the `/26`.
+
+Everything below is the earlier generic plan (OpenWRT as the single BGP edge,
+native routing, kube-vip). Keep it for the rationale, but the VPC table above is
+what is actually being wired — and note node/pod traffic stays on `ens3`, so the
+overlay→native-routing change below is **not** part of this first step.
+
 ## The one fact that drives everything
 
 Cilium runs a **VXLAN overlay today only because OpenStack forces it**: Neutron

@@ -1,0 +1,56 @@
+# Per-node netplan for the Hedgehog fabric vNIC (enp5s0), one trunk carrying the
+# three Midori VPC VLANs. Install as a SEPARATE file so it never touches the
+# existing ens3 config (netplan merges /etc/netplan/*.yaml):
+#     sudo cp fabric-netplan.yaml /etc/netplan/60-fabric.yaml
+#     sudo chmod 600 /etc/netplan/60-fabric.yaml
+#     sudo netplan try         # safe: auto-reverts in 120s if you lose the box
+#     sudo netplan apply
+#
+# DELIBERATELY: ens3 keeps the node's primary IP, default route and the Cilium
+# dataplane. These subinterfaces get NO default route — only their on-link /24s
+# plus the one storage route. So node-to-node, pod and egress stay on ens3.
+#
+# Per node, change ONLY the host octet (cp-0 = .7 here, as assigned). Apply the
+# same file to cp-1/cp-2/eye-0, and to amd-0 and nv-0/nv-1 once their vNIC is
+# attached / they rejoin.
+#
+# PLACEHOLDERS to fill (same on every node unless noted):
+#   <OCTET>         this node's host number (cp-0 = 7)
+#   <MTU>           fabric MTU — 1500, or 9000 if the fabric/VPCs are jumbo-clean
+#   <STORAGE_CIDR>  the peered `storage` VPC subnet (CephFS servers), e.g. 10.200.0.0/24
+#   <STORAGE_GW>    midori-storage anycast gateway on VLAN 108 (e.g. 10.100.2.1) — confirm with Hedgehog
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    enp5s0:                       # trunk parent — no IP of its own
+      dhcp4: no
+      dhcp6: no
+      accept-ra: no
+      mtu: <MTU>
+  vlans:
+    enp5s0.106:                   # midori-bgp  (VLAN 106, 10.100.0.0/24) — BGP + external VIPs
+      id: 106
+      link: enp5s0
+      mtu: <MTU>
+      dhcp4: no
+      addresses: [10.100.0.<OCTET>/24]
+      # NO gateway/default route here. router0 learns our VIPs via BGP (Cilium
+      # peers it over this subnet); return traffic is routed by router0.
+    enp5s0.107:                   # midori-internal (VLAN 107, 10.100.1.0/24) — idle for now
+      id: 107
+      link: enp5s0
+      mtu: <MTU>
+      dhcp4: no
+      addresses: [10.100.1.<OCTET>/24]
+      # Reserved: node/pod east-west stays on ens3 ("ens3 for now"). Brought up
+      # and addressed so the path is ready, but nothing routes over it yet.
+    enp5s0.108:                   # midori-storage (VLAN 108, 10.100.2.0/24) — CephFS
+      id: 108
+      link: enp5s0
+      mtu: <MTU>
+      dhcp4: no
+      addresses: [10.100.2.<OCTET>/24]
+      routes:
+        - to: <STORAGE_CIDR>      # reach the peered `storage` VPC (midori-storage--storage)
+          via: <STORAGE_GW>       # VLAN-108 anycast gateway; omit if the fabric is pure-L2 on-link
