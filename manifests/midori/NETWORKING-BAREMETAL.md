@@ -21,16 +21,23 @@ external and storage paths.
 | `midori-internal` | 10.100.1.0/24, VLAN 107 (no router/peer) | `enp5s0.107` | reserved east-west (idle; `ens3` carries it for now) |
 | `midori-storage` | 10.100.2.0/24, VLAN 108 (peered with `storage`) | `enp5s0.108` | CephFS |
 
-- **Cluster BGP ASN 65254**; nodes peer **router0** over `midori-bgp` (cp-0 =
-  `10.100.0.7`). Cilium advertises LB VIPs from the public **`119.15.113.128/26`**
-  (proposed). Manifests: **`cilium-bgp.yaml`** (BGP v2 + LB-IPAM, router0 ASN/IP to
-  fill) and **`fabric-netplan.yaml`** (one `/etc/netplan/60-fabric.yaml` per node;
-  leaves `ens3` untouched; subinterfaces carry no default route).
-- **Rollout status:** `enp5s0` attached but **down/unconfigured** on cp-0/1/2 +
-  eye-0; **amd-0 still needs the vNIC** (only `ens3` today); **nv-0/nv-1 are down**
-  and reattach when they rejoin.
-- **Open items:** router0's ASN + IP, the `storage` VPC subnet + VLAN-108 gateway,
-  MTU (jumbo?), and confirming the `/26`.
+- **Live & verified (2026-11-17).** All 7 nodes carry the fabric subinterfaces
+  (`enp5s0.106/.107/.108` on cp-0/1/2/eye-0, `enp0s7.*` on nv-0/1/amd-0), **MTU
+  9000**. Cilium's BGP control plane peers **router0 `10.100.0.1`** (running
+  **BIRD**, dynamic `neighbor range 10.100.0.0/24 as 65254`) from every node —
+  **eBGP, cluster AS 65254 ↔ router0 AS 65253, all Established** — and advertises
+  LoadBalancer VIPs from **`119.15.113.128/26`** via LB-IPAM (a Service opts in
+  with label `midori.phoenix/lb-pool=public`). **socketLB stayed `Hostns-only`**
+  across the Cilium upgrade (the gVisor invariant). CephFS is live over `.108`
+  (`ceph-csi`, StorageClass `cephfs`, RWX — see `ceph-csi/README.md`). Manifests:
+  `cilium-bgp.yaml`, `cilium-values.yaml` (`bgpControlPlane.enabled: true`),
+  `fabric-netplan*`, `gen-fabric-netplan.sh`. **Runbook: `FABRIC-BRINGUP.md`.**
+- **Note on the ASN:** router0 is **AS 65253** (not 65254); 65254 is the *cluster*
+  side. The older sketch below (kube-vip at AS 64512, "BGP to OpenWRT") is
+  superseded — router0 is the BIRD edge, and node/pod traffic stays on `ens3`.
+- **Still open:** formalize the `119.15.113.128/26`; router0's **upstream** eBGP so
+  the VIPs are globally reachable (the cluster→router0 half is done).
+  `midori-internal` (VLAN 107) remains idle.
 
 Everything below is the earlier generic plan (OpenWRT as the single BGP edge,
 native routing, kube-vip). Keep it for the rationale, but the VPC table above is

@@ -1,9 +1,12 @@
 # midori: a multi-node GPU cluster on OpenStack (phoenix/tyo)
 
-**Status: built 2026-10-07.** The section directly below records what was
-built and measured, and where reality departed from the plan. Everything after
-it is the original build plan, kept as written; where the two disagree, **As
-built** wins.
+**Status: built 2026-10-07; updated 2026-11-17.** The section directly below
+records what was built and measured, and where reality departed from the plan.
+Everything after it is the original build plan, kept as written; where the two
+disagree, **As built** wins. The **2026-11-17 update** below adds the Hedgehog
+fabric BGP bring-up and CephFS-backed RWX volumes (runbooks: `FABRIC-BRINGUP.md`
+and `ceph-csi/README.md`); it supersedes the plan's "RWX is not available" in
+Step 7.
 
 ## As built (2026-10-07)
 
@@ -28,6 +31,41 @@ built** wins.
     gaps          what the site is missing: OPENSTACK-GAPS.md
     tenants       managed by the tenant controller (../../controller/):
                   `kubectl get tenants`; one Tenant object per tenant
+
+### Update 2026-11-17 — fabric BGP is up, and CephFS gives RWX after all
+
+Two things changed since the 2026-10-07 build; both are live and verified. The
+step-by-step runbooks are `FABRIC-BRINGUP.md` and `ceph-csi/README.md`.
+
+- **Hedgehog fabric + Cilium BGP.** Each VM gained a fabric vNIC (`enp5s0` on
+  cp-0/1/2/eye-0, `enp0s7` on nv-0/1/amd-0) carrying three VLAN-tagged VPCs —
+  bgp (VLAN 106, `10.100.0.0/24`), internal (107, idle), storage (108,
+  `10.100.2.0/24` → CephFS). `ens3` stays the primary route and the Cilium pod
+  dataplane; the fabric only adds external + storage paths. Cilium's BGP control
+  plane (v2 API: `CiliumBGPClusterConfig`/`PeerConfig`/`Advertisement`) peers
+  router0 (`10.100.0.1`, running **BIRD**, dynamic `neighbor range`) from all 7
+  nodes — **eBGP, cluster AS 65254 ↔ router0 AS 65253, all Established** — and
+  advertises LoadBalancer VIPs from the public `119.15.113.128/26` pool via
+  LB-IPAM. A Service gets a VIP by the label `midori.phoenix/lb-pool=public`.
+  **socketLB stayed `Hostns-only`** across the Cilium upgrade (the gVisor
+  invariant). Manifests: `cilium-bgp.yaml`, `cilium-values.yaml`
+  (`bgpControlPlane.enabled: true`), `fabric-netplan*`, `gen-fabric-netplan.sh`.
+  Still open: formalize the `/26`; router0's upstream eBGP for global
+  reachability (the cluster→router0 half is done).
+
+- **CephFS-backed PVs (RWX) — supersedes "RWX is not available" in Step 7.** The
+  external TYO Ceph *does* expose a CephFS (`cephfs`), reached over the fabric
+  storage VLAN (`.108` → `10.33.0.0/24 via 10.100.2.2`). `ceph-csi-cephfs`
+  3.18.2 is deployed (helm, ns `ceph-csi`, provisioner ×2 + nodeplugin on all 7
+  nodes) with StorageClass **`cephfs`** (RWX, dynamic, `Delete` reclaim,
+  expandable). Verified end-to-end, including a **gVisor (runsc) pod** mounting a
+  PVC and sharing RWX with a runc pod. `local-path` remains the default SC for
+  node-local RWO; use `cephfs` for RWX / shared / reschedulable volumes
+  (`storageClassName: cephfs`). Ceph side: reused `client.midori` with caps
+  `mon "allow r fsname=cephfs"`, `mgr "allow rw"`,
+  `osd "allow rwx pool=cephfs.cephfs.meta, allow rw pool=cephfs.cephfs.data"`,
+  `mds "allow rw fsname=cephfs"`, plus a pre-created `csi` subvolumegroup — full
+  detail and troubleshooting in `ceph-csi/README.md`.
 
 ### Step 0, verified
 
@@ -387,6 +425,13 @@ packing. Like the ConfigMap patch above, `helm upgrade` undoes this env; reapply
 it.
 
 ## Step 7 — storage, and model weights without RWX
+
+> **Superseded 2026-11-17 (see the 2026-11-17 update above).** TYO's Ceph *does*
+> run a CephFS (`cephfs`, mons `10.33.0.61-63`), now reachable over the Hedgehog
+> fabric storage VLAN. `ceph-csi-cephfs` provides StorageClass `cephfs` with
+> **RWX** dynamic provisioning (`ceph-csi/README.md`). The paragraph below was
+> true at the 2026-10-07 build, when only block+object were wired; keep it as the
+> record of why S3 was used for weights, but RWX is available today.
 
 tyo's Ceph provides **block and object, not file**: there are keyrings for
 cinder, cinder-backup, glance and nova, and an RGW at `storage.phoenix.tyo`,
