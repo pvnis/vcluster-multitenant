@@ -1,0 +1,19 @@
+# nv-0 — fabric vNIC: REPLACE-IFACE, host octet .110 (same on all three VLANs).
+# Install as /etc/netplan/60-fabric.yaml (separate file; leaves ens3 untouched).
+# If 'REPLACE-IFACE' is wrong, check 'ip -br link' and fix the four refs below.
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    REPLACE-IFACE: { dhcp4: no, dhcp6: no, accept-ra: no, mtu: 9000 }   # trunk parent, no IP
+  vlans:
+    REPLACE-IFACE.106: { id: 106, link: REPLACE-IFACE, mtu: 9000, dhcp4: no, addresses: [10.100.0.110/24] }   # midori-bgp (BGP+VIPs)
+    REPLACE-IFACE.107: { id: 107, link: REPLACE-IFACE, mtu: 9000, dhcp4: no, addresses: [10.100.1.110/24] }   # midori-internal (idle)
+    REPLACE-IFACE.108:                                                                                     # midori-storage → CephFS
+      id: 108
+      link: REPLACE-IFACE
+      mtu: 9000
+      dhcp4: no
+      addresses: [10.100.2.110/24]           # no DHCP; .2 is the storage gateway
+      routes:
+        - { to: 10.33.0.0/24, via: 10.100.2.2 }  # Ceph net (mons .61-.63); only route out .108
