@@ -5,43 +5,50 @@ PVs, backed by the **external** Ceph at `10.33.0.0/24` (mons `.61/.62/.63`),
 reached over the fabric storage VPC (`enp5s0.108` → `10.33.0.0/24 via 10.100.2.2`,
 already up on all nodes). CephFS gives **ReadWriteMany**.
 
-## Status — 2026-11-17
-- **Driver deployed & healthy:** `ceph-csi-cephfs` 3.18.2 (helm release in ns
-  `ceph-csi`), provisioner ×2 + nodeplugin on all 7 nodes. clusterID `tyo-ceph`,
-  mons `.61/.62/.63`. StorageClass `cephfs` applied.
-- **Dynamic provisioning blocked on Ceph caps.** The smoke-test PVC failed with
-  `rados: ret=-1, Operation not permitted` — `client.midori` can mount CephFS but
-  lacks the **mgr/subvolume** caps to *create* subvolumes (data-path caps only,
-  as the gist implied). Decision (user, 2026-11-17): get the caps (go dynamic),
-  not static.
+## Status — WORKING (2026-11-17)
+Dynamic provisioning is live and verified end-to-end:
+- `ceph-csi-cephfs` 3.18.2 (helm, ns `ceph-csi`), provisioner ×2 + nodeplugin on
+  all 7 nodes. clusterID `tyo-ceph`, fs `cephfs`, mons `.61/.62/.63`, over the
+  fabric `.108` path. StorageClass `cephfs` (RWX, `Delete` reclaim, expandable).
+- Smoke test: PVC Bound, a pod wrote+read a file, the subvolume was created under
+  `/volumes/csi`, and PVC delete reclaimed it.
+- **gVisor confirmed:** a `runtimeClassName: gvisor` (runsc) pod mounted the same
+  PVC, read the runc-written file and wrote its own — tenant pods get CephFS
+  volumes, and RWX sharing works across pods.
 
-## Grant the CSI caps (storage team) — then dynamic works
-Create a **dedicated** CSI client (don't mutate `client.midori`, which Manila /
-the test VM also use; `ceph auth caps` *replaces* caps). Run on a Ceph host
-(needs Ceph admin). Defaults match our StorageClass: fs `cephfs`, subvolumegroup
-`csi` (ceph-csi auto-creates the group):
+## How it was enabled (Ceph side, for the record)
+We reused `client.midori` (modified in place), not a dedicated client. TYO
+specifics found along the way: fs `cephfs`; pools `cephfs.cephfs.meta` /
+`cephfs.cephfs.data`.
+
+Final working caps — the osd cap **must** include the *metadata* pool (ceph-csi
+keeps its volume-tracking OMAP there; the first grant omitted it and every
+provision failed `rados: Operation not permitted`):
 ```bash
-ceph auth get-or-create client.midori-csi \
+ceph auth caps client.midori \
+  mon "allow r fsname=cephfs" \
   mgr "allow rw" \
-  osd "allow rwx tag cephfs metadata=cephfs, allow rw tag cephfs data=cephfs" \
-  mds "allow r fsname=cephfs path=/volumes, allow rws fsname=cephfs path=/volumes/csi" \
-  mon "allow r fsname=cephfs"
-# prints the key for client.midori-csi
+  osd "allow rwx pool=cephfs.cephfs.meta, allow rw pool=cephfs.cephfs.data" \
+  mds "allow rw fsname=cephfs"
 ```
-Then point the k8s Secret at the new client (keys stay out of git):
+The default subvolumegroup had to be pre-created (this ceph-csi version does not
+auto-create it):
 ```bash
-kubectl -n ceph-csi delete secret csi-cephfs-secret
-kubectl -n ceph-csi create secret generic csi-cephfs-secret \
-  --from-literal=userID=midori-csi  --from-literal=userKey='<NEW_KEY>' \
-  --from-literal=adminID=midori-csi --from-literal=adminKey='<NEW_KEY>'
+ceph fs subvolumegroup create cephfs csi
 ```
-No helm/StorageClass change needed — re-run the smoke test (Option A) and the PVC
-binds. (`client.midori` with its data caps stays usable for the static path below
-if ever wanted.)
+After any caps change, restart the provisioner so it re-auths with a fresh CephX
+session (an existing session keeps the old, denied auth):
+```bash
+kubectl -n ceph-csi rollout restart deploy/ceph-csi-cephfs-provisioner
+```
 
-### clusterID note
-`tyo-ceph` is just the config key shared by `values.yaml` and `storageclass.yaml`;
-it need not be the Ceph `fsid`. Leave it as-is.
+### Notes
+- `mds "allow rw fsname=cephfs"` is whole-fs (kept so `client.midori` stays usable
+  for any direct `/` mounts). If it becomes k8s-only, narrow to
+  `mds "allow r fsname=cephfs path=/volumes, allow rws fsname=cephfs path=/volumes/csi"`.
+- `tyo-ceph` is just the config key (not the fsid) shared by `values.yaml` and
+  `storageclass.yaml` — leave it.
+- To use CephFS: set `storageClassName: cephfs` on a PVC (`ReadWriteMany` or RWO).
 
 ## Deploy the driver
 ```bash
