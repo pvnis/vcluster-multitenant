@@ -18,6 +18,12 @@ k8sServicePort: 6444
 
 kubeProxyReplacement: true
 
+# BGP control plane: peer router0 over the midori-bgp VPC and advertise LB VIPs
+# (see cilium-bgp.yaml, FABRIC-BRINGUP.md). Additive — doesn't change the existing
+# dataplane; enabling it needs a rolling cilium restart.
+bgpControlPlane:
+  enabled: true
+
 socketLB:
   # MANDATORY. Cilium's default is to translate east-west traffic at the socket
   # layer, in the pod's cgroup at connect(). A gVisor sandbox never makes that
