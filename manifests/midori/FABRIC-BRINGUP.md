@@ -10,9 +10,10 @@ amd-0=120.
 ## 0. Preconditions
 - `enp5s0` attached on the node (BF-2 VF; name may vary — `ip -br link`). amd-0
   still needs it; nv-0/nv-1 when they rejoin.
-- router0 = 10.100.0.1, AS 65254. **Assumed dynamic BGP listen-range over
-  10.100.0.0/24** — if so, any node IP peers without per-node fabric config, and
-  cp-0's `.100` (vs the old `.7`) just works. Step 5 confirms it.
+- router0 = 10.100.0.1, **AS 65253** (BIRD); cluster localASN 65254 → **eBGP**.
+  router0's config was a STATIC neighbor at `.7` — change it to a dynamic
+  **`neighbor range 10.100.0.0/24 as 65254`** so every node peers without a static
+  entry (and `.100` works like `.7` did). Step 5 confirms it.
 
 ## 1. Apply the netplan (per node, start with cp-0)
 ```bash
@@ -50,9 +51,9 @@ kubectl apply -f manifests/midori/cilium-bgp.yaml
 ```bash
 kubectl -n kube-system exec ds/cilium -- cilium bgp peers
 #   want: PeerAddress 10.100.0.1  Session Established
-# on router0:
-#   show bgp summary        -> neighbor 10.100.0.100 Established (accepted via listen range)
-#   show bgp ipv4 unicast   -> our advertised VIPs appear once a Service exists
+# on router0 (BIRD):
+#   birdc show protocols    -> midori_node* per peer, state Established
+#   birdc show route        -> our advertised VIP /32s appear once a Service exists
 ```
 Then a smoke test — a LoadBalancer Service drawing from the public pool:
 ```bash
@@ -65,8 +66,9 @@ kubectl get svc echo -o wide                                 # EXTERNAL-IP from 
 
 ## If the session doesn't establish
 - `cilium bgp peers` stuck Idle/Active → router0 isn't accepting us: confirm the
-  **listen-range** covers 10.100.0.0/24 and the **peer-group remote-as is 65254**
-  (iBGP); check `enp5s0.106` is UP with the right IP and can reach 10.100.0.1.
+  **`neighbor range 10.100.0.0/24 as 65254`** is in place on router0 (BIRD) and
+  our `peerASN` is **65253** (router0's AS, eBGP); check `enp5s0.106` is UP with
+  the right IP and can reach 10.100.0.1.
 - Established but no routes → the Service has no `midori.phoenix/lb-pool=public`
   label (no VIP), or `externalTrafficPolicy` keeps it off nodes without endpoints.
 
