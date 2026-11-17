@@ -17,8 +17,8 @@
 # PLACEHOLDERS to fill (same on every node unless noted):
 #   <OCTET>         this node's host number (cp-0 = 7)
 #   <MTU>           fabric MTU — 1500, or 9000 if the fabric/VPCs are jumbo-clean
-#   <STORAGE_CIDR>  the peered `storage` VPC subnet (CephFS servers), e.g. 10.200.0.0/24
-#   <STORAGE_GW>    midori-storage anycast gateway on VLAN 108 (e.g. 10.100.2.1) — confirm with Hedgehog
+#   <STORAGE_CIDR>  the peered `storage` VPC subnet (Ceph servers) — only if they
+#                   live on a different subnet than 10.100.2.0/24 (see .108 below)
 network:
   version: 2
   renderer: networkd
@@ -51,6 +51,9 @@ network:
       mtu: <MTU>
       dhcp4: no
       addresses: [10.100.2.<OCTET>/24]
-      routes:
-        - to: <STORAGE_CIDR>      # reach the peered `storage` VPC (midori-storage--storage)
-          via: <STORAGE_GW>       # VLAN-108 anycast gateway; omit if the fabric is pure-L2 on-link
+      # midori-storage has NO gateway. How the guest reaches the Ceph servers on
+      # the peered `storage` VPC depends on where they live (TBD — see repo note):
+      #   - same subnet (Ceph on 10.100.2.0/24): on-link already, no route needed.
+      #   - different subnet, fabric proxy-routes the peering: add an on-link route
+      #       routes: [{ to: <STORAGE_CIDR>, scope: link }]
+      # Leave as-is (address only) until confirmed.

@@ -14,8 +14,7 @@
 #          midori.phoenix/fabric-bgp=true
 #     (add nv-0/nv-1 when they rejoin; amd-0 once its vNIC is attached)
 #
-# FILL: <ROUTER0_ASN> and <ROUTER0_IP> (router0 on 10.100.0.0/24 — likely the VPC
-# gateway, e.g. 10.100.0.1). Cluster ASN is 65254 (per midori_cp0).
+# router0 = 10.100.0.1, AS 65254 (same as the cluster → iBGP; see note below).
 ---
 apiVersion: cilium.io/v2
 kind: CiliumBGPClusterConfig
@@ -30,8 +29,11 @@ spec:
       localASN: 65254
       peers:
         - name: router0
-          peerASN: <ROUTER0_ASN>
-          peerAddress: <ROUTER0_IP>       # router0 on 10.100.0.0/24
+          # Same ASN both sides => iBGP within the Midori domain. Intentional:
+          # router0 is the Midori border and does eBGP upstream for the /26.
+          # Cilium and router0 share subnet 10.100.0.0/24, so next-hop is on-link.
+          peerASN: 65254
+          peerAddress: 10.100.0.1          # router0 on midori-bgp (VLAN 106)
           peerConfigRef:
             name: router0
 ---
