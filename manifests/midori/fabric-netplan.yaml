@@ -14,11 +14,12 @@
 # same file to cp-1/cp-2/eye-0, and to amd-0 and nv-0/nv-1 once their vNIC is
 # attached / they rejoin.
 #
-# PLACEHOLDERS to fill (same on every node unless noted):
-#   <OCTET>         this node's host number (cp-0 = 7)
-#   <MTU>           fabric MTU — 1500, or 9000 if the fabric/VPCs are jumbo-clean
-#   <STORAGE_CIDR>  the peered `storage` VPC subnet (Ceph servers) — only if they
-#                   live on a different subnet than 10.100.2.0/24 (see .108 below)
+# FILL ONLY <OCTET> — this node's host number, SAME on all three VLANs (cp-0 = 7).
+# Avoid reserved addresses: .1 on midori-bgp (router0) and .2 on midori-storage
+# (the storage gateway). Everything else is resolved: MTU 9000 (jumbo), and the
+# Ceph network 10.33.0.0/24 (mons 10.33.0.61-63) reached via 10.100.2.2.
+# The vNIC is a BlueField-2 VF; the interface may not be named enp5s0 on every box
+# (confirm with `ip -br link`) — rename the keys below if it differs.
 network:
   version: 2
   renderer: networkd
@@ -27,12 +28,12 @@ network:
       dhcp4: no
       dhcp6: no
       accept-ra: no
-      mtu: <MTU>
+      mtu: 9000
   vlans:
     enp5s0.106:                   # midori-bgp  (VLAN 106, 10.100.0.0/24) — BGP + external VIPs
       id: 106
       link: enp5s0
-      mtu: <MTU>
+      mtu: 9000
       dhcp4: no
       addresses: [10.100.0.<OCTET>/24]
       # NO gateway/default route here. router0 learns our VIPs via BGP (Cilium
@@ -40,7 +41,7 @@ network:
     enp5s0.107:                   # midori-internal (VLAN 107, 10.100.1.0/24) — idle for now
       id: 107
       link: enp5s0
-      mtu: <MTU>
+      mtu: 9000
       dhcp4: no
       addresses: [10.100.1.<OCTET>/24]
       # Reserved: node/pod east-west stays on ens3 ("ens3 for now"). Brought up
@@ -48,12 +49,11 @@ network:
     enp5s0.108:                   # midori-storage (VLAN 108, 10.100.2.0/24) — CephFS
       id: 108
       link: enp5s0
-      mtu: <MTU>
+      mtu: 9000
       dhcp4: no
-      addresses: [10.100.2.<OCTET>/24]
-      # midori-storage has NO gateway. How the guest reaches the Ceph servers on
-      # the peered `storage` VPC depends on where they live (TBD — see repo note):
-      #   - same subnet (Ceph on 10.100.2.0/24): on-link already, no route needed.
-      #   - different subnet, fabric proxy-routes the peering: add an on-link route
-      #       routes: [{ to: <STORAGE_CIDR>, scope: link }]
-      # Leave as-is (address only) until confirmed.
+      addresses: [10.100.2.<OCTET>/24]     # no DHCP here; .2 is the storage gateway
+      routes:
+        - to: 10.33.0.0/24                 # Ceph/storage network (mons 10.33.0.61-63)
+          via: 10.100.2.2                  # midori-stor inter-VPC gw (peered with storage)
+      # This is the ONLY route out .108 (not a default route). Ceph accepts TCP
+      # 3300/6789/6800-7568 from this range; ping/SSH are blocked, so test with TCP.
