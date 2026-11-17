@@ -21,11 +21,11 @@ spec:
     metadata:
       labels: { app: overhead-bench }
       annotations:
-        nvidia.com/use-gpuuuid: "GPU-a12967ad-3cd4-37a4-fa31-614686b21c10"
+        nvidia.com/use-gpuuuid: "GPU-<target-gpu-uuid>"
     spec:
       runtimeClassName: gvisor
       schedulerName: hami-scheduler
-      nodeSelector: { gpu.vendor: nvidia, kubernetes.io/hostname: midori-nv-1 }
+      nodeSelector: { gpu.vendor: nvidia, kubernetes.io/hostname: REPLACE-WITH-TEST-NODE }
       tolerations:
         - { key: slice-test, operator: Exists, effect: NoSchedule }
       restartPolicy: Always
