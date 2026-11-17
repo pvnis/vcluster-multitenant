@@ -37,6 +37,12 @@ Step 7.
 Two things changed since the 2026-10-07 build; both are live and verified. The
 step-by-step runbooks are `FABRIC-BRINGUP.md` and `ceph-csi/README.md`.
 
+**Framing:** midori is *meant to run on bare metal* — it is in OpenStack VMs only
+as a stopgap, because no suitable bare-metal environment was available yet. The
+fabric work below gives the VMs direct fabric access, which is both progress and a
+dress rehearsal for the real target. The bare-metal deployment design (provision
+from the router / Hedgehog control node) is `BAREMETAL-DEPLOYMENT.md`.
+
 - **Hedgehog fabric + Cilium BGP.** Each VM gained a fabric vNIC (`enp5s0` on
   cp-0/1/2/eye-0, `enp0s7` on nv-0/1/amd-0) carrying three VLAN-tagged VPCs —
   bgp (VLAN 106, `10.100.0.0/24`), internal (107, idle), storage (108,

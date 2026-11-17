@@ -6,10 +6,13 @@ BGP-advertised external LoadBalancer VIPs and the CephFS storage path over a
 Hedgehog-managed SONiC fabric. Step-by-step: `FABRIC-BRINGUP.md`. CephFS:
 `ceph-csi/README.md`.
 
-A larger future move **entirely off OpenStack** (plain servers, no overlay, the
-edge on plain switches) is kept at the end as **design-only — not deployed**. The
-deployed fabric already realizes that design's core — Cilium BGP + a routable
-LB-IPAM pool — just peered to the fabric's `router0` instead of to OpenWRT.
+The move **entirely off OpenStack onto bare metal** (plain servers, no overlay, the
+edge on plain switches) is midori's **intended target** — the VMs are a stopgap.
+The appendix at the end keeps the network-side specifics as **design-only, not yet
+deployed**; the full bring-up design (provision from the router / Hedgehog control
+node) is `BAREMETAL-DEPLOYMENT.md`. The deployed fabric already realizes this
+design's core — Cilium BGP + a routable LB-IPAM pool — just peered to the fabric's
+`router0` instead of to OpenWRT.
 
 Grounded in the cluster as it runs today: Cilium v1.19.8, k3s HA,
 `routing-mode=tunnel/vxlan` on `ens3`, pods `10.42.0.0/16`, services
@@ -70,8 +73,9 @@ edge changed.
 > come from **`119.15.113.128/26`**. The original sketch here predated the fabric
 > and used placeholder **OpenWRT/FRR at AS 64512/64513** and a `/27` — treat those
 > numbers as illustrative, superseded by the deployed values above. Kept for the
-> rationale and as the plan if midori ever leaves the VMs. The full original
-> (FRR/kube-vip/LB-IPAM YAML, address plan) is in git history before this cleanup.
+> rationale and as the network-side plan for the bare-metal target (the deployment
+> design is `BAREMETAL-DEPLOYMENT.md`). The full original (FRR/kube-vip/LB-IPAM
+> YAML, address plan) is in git history before this cleanup.
 
 If midori moves onto plain servers, the overlay constraint disappears and the
 removal cascades — native routing, jumbo end-to-end, DSR/source-IP preservation,
