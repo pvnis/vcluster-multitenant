@@ -7,6 +7,34 @@ dataplane throughout — this only adds the external + storage paths, so it's
 non-disruptive. Octets: cp-0=100 cp-1=101 cp-2=102 eye-0=10 nv-0=110 nv-1=111
 amd-0=120.
 
+## Status: brought up and verified — 2026-11-17
+
+Done and confirmed:
+- **Fabric netplan applied on all 7 nodes** — `.106/.107/.108` up (cp-0/1/2/eye-0
+  on `enp5s0`, nv-0/nv-1/amd-0 on `enp0s7`), MTU 9000. Octets cp-0=100 cp-1=101
+  cp-2=102 eye-0=10 nv-0=110 nv-1=111 amd-0=120.
+- **CephFS path** — `10.33.0.0/24 via 10.100.2.2` on `.108`; validated by TCP to a
+  mon (`nc 10.33.0.61 6789`) on cp-0 (ICMP is blocked by design).
+- **Cilium BGP control plane enabled** — `helm upgrade` (release rev 5; the diff
+  vs. the running values showed it added only `bgpControlPlane.enabled`), operator
+  + agents rolled, BGP v2 CRDs installed. **socketLB stayed `Hostns-only`** (the
+  mandatory gVisor setting).
+- **eBGP to router0 established on all 7 nodes** — `65254 ↔ 65253`, peer
+  `10.100.0.1`. router0 uses a dynamic `neighbor range 10.100.0.0/24 as 65254`
+  (accepted the nodes from `.100`+, so the old static `.7` entry is moot).
+- **LB VIP path proven** — a throwaway LoadBalancer Service drew `119.15.113.128`
+  from the `/26` pool, and Cilium advertised `119.15.113.128/32` to router0 with
+  next-hop the node's fabric IP. Service deleted after.
+
+Still open:
+- **Confirm `119.15.113.128/26`** (still a proposal) before real public services.
+- **router0 upstream eBGP** — re-advertise the `/26` upstream so VIPs are
+  internet-reachable (router side; the cluster→router0 half is done).
+- Node/pod dataplane stays on `ens3`; `.107` (midori-internal) is idle.
+
+The steps below are the procedure that was run (kept as the runbook for new nodes
+/ rebuilds).
+
 ## 0. Preconditions
 - `enp5s0` attached on the node (BF-2 VF; name may vary — `ip -br link`). amd-0
   still needs it; nv-0/nv-1 when they rejoin.
