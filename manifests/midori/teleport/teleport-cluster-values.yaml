@@ -39,9 +39,9 @@ proxy:
       loadBalancerIP: "119.15.113.134"
 
 # TLS: option B (self-signed). Teleport self-signs for clusterName on first start;
-# agents trust its CA (exported with `tctl auth export`). Switch to A (ACME) later.
-acme:
-  enabled: false
+# agents trust its CA (exported with `tctl auth export`). Switch to A (ACME) later
+# by setting `acme: true` + `acmeEmail`.
+acme: false
 
 # Local backend persistence (standalone = SQLite). MUST be node-local disk, not a
 # networked FS -- SQLite over CephFS/NFS risks lock corruption. local-path pins the
