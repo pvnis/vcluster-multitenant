@@ -219,13 +219,16 @@ export class Templates {
   // The vCluster's Helm values, merged as `vcluster create --values ...` did.
   vclusterValues(t: Tenant, apiNodePort: number): Record<string, unknown> {
     const overlay: Record<string, unknown> = { controlPlane: { service: { httpsNodePort: apiNodePort } } };
-    if (t.spec.controlPlane.size === 'large') {
-      // As values/tenant-phoenix-serving.yaml: Phoenix Serving's CRD install
-      // crashed a 1 CPU / 1Gi control plane.
-      (overlay.controlPlane as Record<string, unknown>).statefulSet = {
-        resources: { requests: { cpu: '1', memory: '1Gi' }, limits: { cpu: '4', memory: '4Gi' } },
-      };
-    }
+    // Control-plane requests sized to REAL usage so the scheduler accounts for it.
+    // The vCluster chart's default small request (100m CPU / 256Mi) badly
+    // under-counts a real control plane (~350-400m CPU, ~650Mi memory), so the
+    // scheduler packs nodes it thinks are free and they end up CPU-contended. A
+    // 'large' control plane also needs headroom for Phoenix Serving's CRD install
+    // (which crashed a 1 CPU / 1Gi one -- see values/tenant-phoenix-serving.yaml).
+    const cpResources = t.spec.controlPlane.size === 'large'
+      ? { requests: { cpu: '1', memory: '1Gi' }, limits: { cpu: '4', memory: '4Gi' } }
+      : { requests: { cpu: '500m', memory: '768Mi' }, limits: { cpu: '1', memory: '1536Mi' } };
+    (overlay.controlPlane as Record<string, unknown>).statefulSet = { resources: cpResources };
     const values = deepMerge(
       parse(this.raw('vcluster-tenant.yaml')),
       parse(this.raw('vcluster-nv-tenant.yaml')),

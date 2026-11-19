@@ -81,6 +81,15 @@ for (const [name, port, size] of [
   });
 }
 
+test('control-plane requests are sized to real usage so the scheduler accounts for it', () => {
+  const small = T.vclusterValues(tenant('tenant-x', { controlPlane: { size: 'small' } }), 31000) as any;
+  // was the chart default 100m/256Mi, which under-counts a real control plane
+  // (~350-400m CPU, ~650Mi) and lets the scheduler over-pack nodes.
+  assert.deepEqual(small.controlPlane.statefulSet.resources.requests, { cpu: '500m', memory: '768Mi' });
+  const large = T.vclusterValues(tenant('tenant-x', { controlPlane: { size: 'large' } }), 31000) as any;
+  assert.deepEqual(large.controlPlane.statefulSet.resources.requests, { cpu: '1', memory: '1Gi' });
+});
+
 test('deepMerge: maps merge, lists replace', () => {
   assert.deepEqual(deepMerge({ a: { b: 1, l: [1, 2] } }, { a: { c: 2, l: [3] } }), { a: { b: 1, c: 2, l: [3] } });
 });
