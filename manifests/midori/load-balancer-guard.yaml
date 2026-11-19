@@ -1,34 +1,19 @@
-# What a tenant may ask of the OpenStack cloud controller
-# (openstack-cloud-controller-manager, occm/), on the host:
+# Gate the public fabric VIP a tenant may draw.
 #
 #   kubectl apply -f load-balancer-guard.yaml
 #
-# Every type: LoadBalancer Service in a tenant namespace becomes an Octavia
-# load balancer, an amphora VM in the shared OpenStack project. How many a
-# tenant may have is its ResourceQuota (services.loadbalancers, from the
-# Tenant's loadBalancers.count; 0 by default). This policy covers the rest:
+# A Service labelled midori.phoenix/lb-pool=public draws a VIP from the public
+# /26 LB-IPAM pool (cilium-bgp.yaml) and Cilium advertises it over BGP. The
+# vCluster syncer passes tenant-set labels through to the host, so this host-side
+# check is what stops a tenant self-granting one: the label is denied unless the
+# namespace is midori.phoenix/load-balancers=public (set by the controller from
+# the Tenant's loadBalancers.public). The controller stamps the label only for
+# granted tenants (controller/src/components/loadbalancers.ts); this policy is
+# the independent gate.
 #
-# - A public floating IP only where the Tenant allows it (loadBalancers.public,
-#   namespace label midori.phoenix/load-balancers=public). The cloud controller
-#   makes load balancers internal by default (internal-lb = true); a Service
-#   asks for a floating IP with
-#   service.beta.kubernetes.io/openstack-internal-load-balancer: "false".
-# - A public *fabric* VIP (Cilium LB-IPAM, 119.15.113.128/26, advertised by BGP
-#   -- cilium-bgp.yaml) the same way: the label midori.phoenix/lb-pool=public on
-#   a Service is denied unless the namespace is midori.phoenix/load-balancers=
-#   public. This is the fabric replacement for the OpenStack floating IP above
-#   (OCCM is being retired). The vCluster syncer passes labels through to the
-#   host, so this host-side check is what stops a tenant self-granting a public
-#   VIP; the controller adds the label only for granted tenants (templates.ts).
-# - No other cloud-controller annotations and no spec.loadBalancerIP. They
-#   choose a specific floating IP, network or existing load balancer, and the
-#   project is shared: they would let a tenant take another user's floating IP
-#   or attach to a load balancer that is not its own.
-# - Annotations the cloud controller writes itself (load-balancer-id, ...) may
-#   stay as they are on update, so the vCluster syncer can keep updating the
-#   Service; a tenant cannot set or change them.
-#
-# The cloud controller's own requests are not checked (matchConditions).
+# History: this replaced a per-tenant OpenStack floating-IP gate. OpenStack
+# Octavia and the cloud-controller (occm) were retired 2026-11-19 -- tenant VIPs
+# now come from the Cilium LB-IPAM pool, not amphora load balancers.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata: { name: tenant-load-balancers }
@@ -42,32 +27,12 @@ spec:
       apiVersions: [v1]
       operations: [CREATE, UPDATE]
       resources: [services]
-  matchConditions:
-  - name: not-the-cloud-controller
-    expression: request.userInfo.username != 'system:serviceaccount:kube-system:cloud-controller-manager'
   variables:
-  - name: toggle
-    expression: "'service.beta.kubernetes.io/openstack-internal-load-balancer'"
-  - name: ann
-    expression: "has(object.metadata.annotations) ? object.metadata.annotations : {}"
-  - name: oldAnn
-    expression: "oldObject != null && has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}"
   - name: lbMode
     expression: >-
       has(namespaceObject.metadata.labels) && 'midori.phoenix/load-balancers' in namespaceObject.metadata.labels
         ? namespaceObject.metadata.labels['midori.phoenix/load-balancers'] : 'none'
   validations:
-  - expression: "!has(object.spec.loadBalancerIP) || object.spec.loadBalancerIP == ''"
-    message: "spec.loadBalancerIP is not allowed in a tenant: it chooses a specific floating IP in the shared project."
-  - expression: >-
-      variables.ann.all(k,
-        !(k.startsWith('loadbalancer.openstack.org/') || k.startsWith('service.beta.kubernetes.io/openstack-'))
-        || k == variables.toggle
-        || (k in variables.oldAnn && variables.oldAnn[k] == variables.ann[k]))
-    message: "Only service.beta.kubernetes.io/openstack-internal-load-balancer may be set among the OpenStack cloud controller's annotations in a tenant."
-  - expression: >-
-      !(variables.toggle in variables.ann) || variables.ann[variables.toggle] == 'true' || variables.lbMode == 'public'
-    message: "This tenant may not have public load balancers (Tenant spec.loadBalancers.public)."
   - expression: >-
       !(has(object.metadata.labels) && 'midori.phoenix/lb-pool' in object.metadata.labels
         && object.metadata.labels['midori.phoenix/lb-pool'] == 'public')
