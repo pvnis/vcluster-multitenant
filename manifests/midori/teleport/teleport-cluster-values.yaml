@@ -52,3 +52,14 @@ persistence:
   size: "5Gi"
 
 # Audit log: stays in the local backend for standalone; ship to Loki/S3 later.
+
+# The teleport-operator reconciles Teleport resources (roles, provision tokens,
+# bots) declared as Kubernetes CRs into Auth — so the midori controller manages
+# each tenant's Teleport role + join token declaratively (spec.access.teleport),
+# with no tctl. Enabling it adds the operator Deployment + the resources CRDs and
+# bootstraps an `operator` role/token into the Auth config (a one-time Auth pod
+# restart; the Proxy and existing agent tunnels are untouched).
+#   helm upgrade teleport teleport/teleport-cluster --version 18.11.12 -n teleport \
+#     -f teleport-cluster-values.yaml
+operator:
+  enabled: true

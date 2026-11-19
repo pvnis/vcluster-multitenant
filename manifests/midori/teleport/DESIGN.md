@@ -86,10 +86,17 @@ public API VIP is unnecessary (keep `api.expose` only as allowlisted break-glass
 2. **Wire tenant-sim by hand** — a `teleport-kube-agent` registering its vCluster,
    a scoped role, and a `tbot` agent identity; prove `tsh kube` access end-to-end
    and that it shows in the audit log. Compare against the `api.expose` path.
-3. **Controller option** — add `spec.access.teleport`; the controller renders the
-   per-tenant role + join token + kube-agent + bot, keyed off the tenant's
-   existing vCluster kubeconfig. Unit-test the rendering; validate on a disposable
-   tenant (never on a real one first — the vcluster lesson).
+3. **Controller option** — DONE (code). `spec.access.teleport` (CRD + types +
+   UI); component `controller/src/components/teleport.ts` renders the per-tenant
+   role + join token (operator CRs) + kube-agent (host) and the impersonation RBAC
+   (into the vCluster, via a second client from the `<tenant>-kubeconfig` Secret).
+   Templatized as `tenant-teleport-{host,vcluster}.yaml`; 36 unit tests pass,
+   typecheck clean. **teleport-operator enabled** (helm rev 2; Auth restarted once,
+   Proxy + agent tunnels untouched) and the CR path validated end-to-end — a
+   rendered `TeleportRoleV7` + `TeleportProvisionToken` reconcile into Auth on apply
+   and are removed on delete. REMAINING: rebuild/redeploy the controller image +
+   apply the new CRD + refresh the templates ConfigMap, then flip the flag on a
+   disposable tenant (never a real one first — the vcluster lesson).
 
 ## Not in scope yet
 
