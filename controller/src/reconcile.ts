@@ -7,6 +7,7 @@ import type { Templates } from './templates.ts';
 import { reconcileObjects } from './components/objects.ts';
 import { deleteVCluster, reconcileVCluster } from './components/vcluster.ts';
 import { reconcileS3, removeKey } from './components/s3.ts';
+import { reconcileLoadBalancers } from './components/loadbalancers.ts';
 import { deleteGrafana, reconcileGrafana } from './components/grafana.ts';
 import { deleteCredentials } from './components/credentials.ts';
 import {
@@ -42,6 +43,9 @@ export async function reconcileTenant(kube: Kube, templates: Templates, raw: Ten
     // Before the vCluster: a consumer's vCluster replicates the broker's Service.
     ['Models', () => reconcileObjects(kube, 'Models', r.present.Models, r.absent.Models ?? [], mode)],
     ['VCluster', () => reconcileVCluster(kube, templates, t)],
+    // After the vCluster: its syncer is what creates the host LoadBalancer
+    // Services this labels for a fabric VIP.
+    ['LoadBalancers', () => reconcileLoadBalancers(kube, t, mode)],
     ['S3', () => reconcileS3(kube, t)],
     ['Metrics', () => reconcileObjects(kube, 'Metrics', r.present.Metrics, [], mode)],
     ['Grafana', () => reconcileGrafana(kube, templates, t)],

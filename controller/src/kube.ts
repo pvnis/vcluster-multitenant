@@ -80,6 +80,12 @@ export class Kube {
       setHeaderOptions('Content-Type', PatchStrategy.JsonPatch));
   }
 
+  // RFC 6902 JSON patch on a namespaced Service (used to remove a label key).
+  async jsonPatchService(namespace: string, name: string, ops: object[]): Promise<void> {
+    await this.core.patchNamespacedService({ name, namespace, body: ops },
+      setHeaderOptions('Content-Type', PatchStrategy.JsonPatch));
+  }
+
   async read<T extends KubernetesObject>(obj: KubernetesObject): Promise<T | undefined> {
     try {
       return (await this.raw('GET', header(obj), 'read')) as T;

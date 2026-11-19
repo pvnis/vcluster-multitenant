@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { Templates } from '../src/templates.ts';
 import { withDefaults, type Tenant } from '../src/types.ts';
 import { diffPaths, deepMerge } from '../src/diff.ts';
+import { lbPoolActions } from '../src/components/loadbalancers.ts';
 
 const T = new Templates('test/.templates');
 
@@ -212,4 +213,17 @@ test('load balancers: none by default; count becomes the quota, public the names
   assert.equal(label(pub), 'public');
   // public without any count grants nothing
   assert.equal(label(T.render(tenant('tenant-x', { loadBalancers: { count: 0, public: true } }))), 'none');
+});
+
+test('lbPoolActions: label LoadBalancer services when granted, clear when not, ignore ClusterIP', () => {
+  const svcs = [
+    { metadata: { name: 'lb1', labels: {} }, spec: { type: 'LoadBalancer' } },
+    { metadata: { name: 'lb2', labels: { 'midori.phoenix/lb-pool': 'public' } }, spec: { type: 'LoadBalancer' } },
+    { metadata: { name: 'cip', labels: {} }, spec: { type: 'ClusterIP' } },
+  ];
+  // granted: label the unlabelled LB (lb1); lb2 already set; cip ignored
+  assert.deepEqual(lbPoolActions(svcs, true), { add: ['lb1'], remove: [] });
+  // not granted: clear the labelled LB (lb2); lb1 and cip untouched
+  assert.deepEqual(lbPoolActions(svcs, false), { add: [], remove: ['lb2'] });
+  assert.deepEqual(lbPoolActions([], true), { add: [], remove: [] });
 });
