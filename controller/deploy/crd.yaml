@@ -136,9 +136,24 @@ spec:
                 default: {}
                 properties:
                   count: { type: integer, minimum: 0, maximum: 10, default: 0 }
-                  # May a Service ask for a public floating IP
-                  # (annotation service.beta.kubernetes.io/openstack-internal-load-balancer: "false")?
+                  # May a Service draw a public fabric VIP (midori.phoenix/lb-pool=public)?
                   public: { type: boolean, default: false }
+              # Expose the tenant's own Kubernetes API outside the cluster on a
+              # fabric VIP (public /26, allowlisted). The vCluster API Service
+              # becomes type LoadBalancer and the VIP is added to the API cert
+              # SANs. Costs one load balancer and forces the namespace public.
+              api:
+                type: object
+                default: {}
+                properties:
+                  expose: { type: boolean, default: false }
+                  # Operator-chosen IP from the public /26 (so the cert SAN is
+                  # deterministic). Must be free in the pool.
+                  vip: { type: string }
+                  sourceRanges:
+                    type: array
+                    default: []
+                    items: { type: string }
               access:
                 type: object
                 default: {}

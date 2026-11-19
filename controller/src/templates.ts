@@ -47,6 +47,11 @@ export class Templates {
   render(t: Tenant, others: string[] = []): Rendered {
     const name = t.metadata!.name!;
     const s = t.spec;
+    // api.expose publishes the tenant API as a public LoadBalancer, so it costs
+    // one load balancer and forces the namespace public (for the lb-pool gate).
+    const lbCount = s.loadBalancers.count + (s.api.expose ? 1 : 0);
+    const lbPublic = s.loadBalancers.public || s.api.expose;
+    const lbMode = lbCount > 0 ? (lbPublic ? 'public' : 'internal') : 'none';
     const v = { NAMESPACE: name, TENANT: name, GPUMEM: String(s.quota.gpuMemoryMiB), GPUS: String(s.quota.gpus) };
     const namespace: KubernetesObject = {
       apiVersion: 'v1',
@@ -60,7 +65,7 @@ export class Templates {
           tenant: name,
           'pod-security.kubernetes.io/enforce': 'baseline',
           // Read by manifests/midori/load-balancer-guard.yaml.
-          'midori.phoenix/load-balancers': s.loadBalancers.count > 0 ? (s.loadBalancers.public ? 'public' : 'internal') : 'none',
+          'midori.phoenix/load-balancers': lbMode,
         },
       },
     };
@@ -104,7 +109,7 @@ export class Templates {
       // Bounds how many type: LoadBalancer Services the tenant may have. A
       // public one now draws a VIP from the fabric /26 (Cilium LB-IPAM + BGP),
       // not an Octavia amphora. None unless the Tenant asks.
-      rq.spec.hard['services.loadbalancers'] = String(s.loadBalancers.count);
+      rq.spec.hard['services.loadbalancers'] = String(lbCount);
     }
     // Models: the broker in front of this tenant's Gateway, if it offers it,
     // and this tenant's side of each provider it may call.
@@ -166,6 +171,10 @@ export class Templates {
     ) as {
       networking?: { replicateServices?: { fromHost?: Array<{ from: string; to: string }> } };
       sync?: { fromHost?: { nodes?: unknown } };
+      controlPlane?: {
+        service?: { spec?: Record<string, unknown>; labels?: Record<string, string> };
+        proxy?: { extraSANs?: string[] };
+      };
     };
     // Node sync scoped to this tenant's GPU vendor: its scheduler sees only
     // host nodes labelled gpu.vendor=<vendor> (and nothing about other tenants
@@ -180,6 +189,24 @@ export class Templates {
     if (providers.length) {
       const rs = ((values.networking ??= {}).replicateServices ??= {});
       rs.fromHost = [...(rs.fromHost ?? []), ...providers.map((p) => ({ from: `model-providers/${p}`, to: `model-providers/${p}` }))];
+    }
+    // api.expose: publish the vCluster API Service as a LoadBalancer on the
+    // operator's fabric VIP (allowlisted), drawing from the public /26 pool
+    // (midori.phoenix/lb-pool=public), and add that VIP to the API serving
+    // cert's SANs so an external client validates TLS. The NodePort stays, so
+    // in-cluster access is unchanged. (controlPlane.service / extraSANs are core
+    // vCluster config, not a Pro feature.)
+    if (t.spec.api.expose && t.spec.api.vip) {
+      const cp = (values.controlPlane ??= {});
+      const svc = (cp.service ??= {});
+      svc.spec = { ...(svc.spec ?? {}), type: 'LoadBalancer', loadBalancerIP: t.spec.api.vip, loadBalancerSourceRanges: t.spec.api.sourceRanges };
+      // The midori.phoenix/lb-pool=public label (so LB-IPAM assigns the VIP) is
+      // stamped host-side by the LoadBalancers component, not here -- vCluster
+      // ignores controlPlane.service.labels.
+      const proxy = (cp.proxy ??= {});
+      // Append to the node-IP SANs from vcluster-midori-tenant.yaml (deepMerge
+      // replaces lists, so compute the union here).
+      proxy.extraSANs = [...(proxy.extraSANs ?? []), t.spec.api.vip];
     }
     return values;
   }

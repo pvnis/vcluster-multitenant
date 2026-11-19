@@ -50,6 +50,12 @@ export interface TenantSpec {
   // whether they may take a public floating IP
   // (manifests/midori/load-balancer-guard.yaml).
   loadBalancers: { count: number; public: boolean };
+  // Expose this tenant's own Kubernetes API outside the cluster. The vCluster
+  // API Service becomes type LoadBalancer on an operator-chosen fabric VIP (from
+  // the public /26), source-IP allowlisted, and the VIP is added to the API
+  // serving cert's SANs so TLS validates. Costs one of the tenant's load
+  // balancers and forces its namespace public (load-balancer-guard.yaml).
+  api: { expose: boolean; vip?: string; sourceRanges: string[] };
   // Zero-trust access to this tenant's k8s API via Teleport (manifests/midori/
   // teleport/DESIGN.md): identity-based, audited, NO public API surface (the
   // agent dials outbound). When true the controller registers the vCluster as a
@@ -118,6 +124,7 @@ export function withDefaults(t: Tenant): Tenant {
       modelProvider: { enabled: s.modelProvider?.enabled ?? false },
       modelProviders: s.modelProviders ?? [],
       loadBalancers: { count: s.loadBalancers?.count ?? 0, public: s.loadBalancers?.public ?? false },
+      api: { expose: s.api?.expose ?? false, vip: s.api?.vip, sourceRanges: s.api?.sourceRanges ?? [] },
       access: { teleport: s.access?.teleport ?? false },
     },
   };

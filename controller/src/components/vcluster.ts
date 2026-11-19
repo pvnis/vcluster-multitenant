@@ -89,9 +89,14 @@ export async function reconcileVCluster(kube: Kube, templates: Templates, t: Ten
   if (kubeconfig) drift.push(kubeconfig);
   const managed = t.spec.management === 'Manage';
   const ok = managed || drift.length === 0;
+  // When the API is exposed externally (api.expose), report the public VIP as
+  // the endpoint (what the dashboard shows and what an external client uses);
+  // otherwise the internal node NodePort. The operator's admin kubeconfig
+  // Secret stays on the NodePort (the VIP is allowlisted to the agent, not cp-0).
+  const apiEndpoint = t.spec.api.expose && t.spec.api.vip ? `https://${t.spec.api.vip}:443` : `https://${API_HOST}:${port}`;
   return {
     drift: managed ? [] : drift,
-    status: { apiNodePort: port, apiEndpoint: `https://${API_HOST}:${port}`, kubeconfigSecret: `${KUBECONFIG_NAMESPACE}/${name}-kubeconfig` },
+    status: { apiNodePort: port, apiEndpoint, kubeconfigSecret: `${KUBECONFIG_NAMESPACE}/${name}-kubeconfig` },
     condition: {
       type: 'VClusterReady',
       status: ok ? 'True' : 'False',
@@ -110,7 +115,10 @@ async function reconcileKubeconfig(kube: Kube, t: Tenant, port: number): Promise
   const target: KubernetesObject = { apiVersion: 'v1', kind: 'Secret', metadata: { name: `${name}-kubeconfig`, namespace: KUBECONFIG_NAMESPACE } };
   if (!src?.data?.config) return undefined; // the release is not up yet
   const cfg = parse(Buffer.from(src.data.config, 'base64').toString()) as any;
-  for (const c of cfg.clusters ?? []) c.cluster.server = `https://${API_HOST}:${port}`;
+  // Point the downloadable kubeconfig at the same endpoint the dashboard shows:
+  // the public VIP when api.expose, else the internal node NodePort.
+  const server = t.spec.api.expose && t.spec.api.vip ? `https://${t.spec.api.vip}:443` : `https://${API_HOST}:${port}`;
+  for (const c of cfg.clusters ?? []) c.cluster.server = server;
   const want: V1Secret = {
     ...(target as V1Secret),
     metadata: { ...target.metadata, labels: { 'midori.phoenix/tenant': name } },

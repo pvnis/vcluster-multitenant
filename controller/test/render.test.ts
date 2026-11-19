@@ -280,3 +280,19 @@ test('teleportVcluster: least-privilege RBAC, group bound, no Secrets verb', () 
   const rb = objs.find((o) => o.kind === 'RoleBinding') as any;
   assert.equal(rb.subjects[0].name, 'teleport:tenant-sim-runner');
 });
+
+test('api.expose: vcluster API becomes an allowlisted LoadBalancer VIP + cert SAN; namespace public, quota +1', () => {
+  const spec = { api: { expose: true, vip: '119.15.113.133', sourceRanges: ['96.248.87.234/32'] } };
+  const vv = T.vclusterValues(tenant('tenant-x', spec), 31000) as any;
+  assert.equal(vv.controlPlane.service.spec.type, 'LoadBalancer');
+  assert.equal(vv.controlPlane.service.spec.loadBalancerIP, '119.15.113.133');
+  assert.deepEqual(vv.controlPlane.service.spec.loadBalancerSourceRanges, ['96.248.87.234/32']);
+  assert.ok(vv.controlPlane.proxy.extraSANs.includes('119.15.113.133'), 'VIP in cert SANs');
+  assert.ok(vv.controlPlane.proxy.extraSANs.includes('10.30.30.31'), 'node SANs kept');
+  const r = T.render(tenant('tenant-x', spec));
+  assert.equal((r.present.Namespace[0].metadata as any).labels['midori.phoenix/load-balancers'], 'public');
+  assert.equal((r.present.Quota.find((o: any) => o.kind === 'ResourceQuota') as any).spec.hard['services.loadbalancers'], '1');
+  // off by default: the API service keeps the base template's NodePort type
+  const off = T.vclusterValues(tenant('tenant-x', {}), 31000) as any;
+  assert.equal(off.controlPlane?.service?.spec?.type, 'NodePort');
+});
