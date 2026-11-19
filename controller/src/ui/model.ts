@@ -40,6 +40,7 @@ export function parseSpec(input: any): TenantSpec {
     modelProvider: { enabled: false },
     modelProviders: [],
     loadBalancers: { count: 0, public: false },
+    api: { expose: false, sourceRanges: [] },
   };
   const cpu = { requests: opt(q.cpu?.requests, CPU_RE, 'CPU requests', '"20" or "500m"'), limits: opt(q.cpu?.limits, CPU_RE, 'CPU limits', '"36"') };
   const memory = { requests: opt(q.memory?.requests, MEM_RE, 'Memory requests', '"96Gi"'), limits: opt(q.memory?.limits, MEM_RE, 'Memory limits', '"160Gi"') };
@@ -72,6 +73,7 @@ export function carryOver(existing: Partial<TenantSpec> | undefined, spec: Tenan
   if (existing?.modelProvider) spec.modelProvider = existing.modelProvider;
   if (existing?.modelProviders) spec.modelProviders = existing.modelProviders;
   if (existing?.loadBalancers) spec.loadBalancers = existing.loadBalancers;
+  if (existing?.api) spec.api = existing.api;
   if (existing?.gpuVendor) spec.gpuVendor = existing.gpuVendor;
   return spec;
 }
