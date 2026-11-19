@@ -95,8 +95,9 @@ export class Templates {
       // this extended resource, so ResourceQuota counts requests natively (no
       // webhook total-resource needed, unlike NVIDIA). Unset = not limited.
       if (q.amdGpuVramMiB !== undefined) rq.spec.hard['requests.amd.com/gpu-vram-mib'] = String(Math.floor(q.amdGpuVramMiB / 512));
-      // Each one is an amphora VM in the shared OpenStack project: none unless
-      // the Tenant asks.
+      // Bounds how many type: LoadBalancer Services the tenant may have. A
+      // public one now draws a VIP from the fabric /26 (Cilium LB-IPAM + BGP),
+      // not an Octavia amphora. None unless the Tenant asks.
       rq.spec.hard['services.loadbalancers'] = String(s.loadBalancers.count);
     }
     // Models: the broker in front of this tenant's Gateway, if it offers it,

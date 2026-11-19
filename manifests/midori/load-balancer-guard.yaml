@@ -13,6 +13,13 @@
 #   makes load balancers internal by default (internal-lb = true); a Service
 #   asks for a floating IP with
 #   service.beta.kubernetes.io/openstack-internal-load-balancer: "false".
+# - A public *fabric* VIP (Cilium LB-IPAM, 119.15.113.128/26, advertised by BGP
+#   -- cilium-bgp.yaml) the same way: the label midori.phoenix/lb-pool=public on
+#   a Service is denied unless the namespace is midori.phoenix/load-balancers=
+#   public. This is the fabric replacement for the OpenStack floating IP above
+#   (OCCM is being retired). The vCluster syncer passes labels through to the
+#   host, so this host-side check is what stops a tenant self-granting a public
+#   VIP; the controller adds the label only for granted tenants (templates.ts).
 # - No other cloud-controller annotations and no spec.loadBalancerIP. They
 #   choose a specific floating IP, network or existing load balancer, and the
 #   project is shared: they would let a tenant take another user's floating IP
@@ -61,6 +68,11 @@ spec:
   - expression: >-
       !(variables.toggle in variables.ann) || variables.ann[variables.toggle] == 'true' || variables.lbMode == 'public'
     message: "This tenant may not have public load balancers (Tenant spec.loadBalancers.public)."
+  - expression: >-
+      !(has(object.metadata.labels) && 'midori.phoenix/lb-pool' in object.metadata.labels
+        && object.metadata.labels['midori.phoenix/lb-pool'] == 'public')
+      || variables.lbMode == 'public'
+    message: "This tenant may not draw a public fabric VIP: the label midori.phoenix/lb-pool=public requires Tenant spec.loadBalancers.public."
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
