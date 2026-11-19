@@ -41,8 +41,9 @@ export function parseSpec(input: any): TenantSpec {
     modelProviders: [],
     loadBalancers: { count: 0, public: false },
     api: { expose: false, sourceRanges: [] },
-    // Not in the form: set with kubectl, kept on edit (carryOver), like `api`.
-    access: { teleport: false },
+    // A form toggle (the create/edit checkbox), so it is read from input here
+    // and NOT carried over — the form owns it, like gateway/internet.
+    access: { teleport: !!input?.access?.teleport },
   };
   const cpu = { requests: opt(q.cpu?.requests, CPU_RE, 'CPU requests', '"20" or "500m"'), limits: opt(q.cpu?.limits, CPU_RE, 'CPU limits', '"36"') };
   const memory = { requests: opt(q.memory?.requests, MEM_RE, 'Memory requests', '"96Gi"'), limits: opt(q.memory?.limits, MEM_RE, 'Memory limits', '"160Gi"') };
@@ -76,7 +77,6 @@ export function carryOver(existing: Partial<TenantSpec> | undefined, spec: Tenan
   if (existing?.modelProviders) spec.modelProviders = existing.modelProviders;
   if (existing?.loadBalancers) spec.loadBalancers = existing.loadBalancers;
   if (existing?.api) spec.api = existing.api;
-  if (existing?.access) spec.access = existing.access;
   if (existing?.gpuVendor) spec.gpuVendor = existing.gpuVendor;
   return spec;
 }

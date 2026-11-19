@@ -425,7 +425,7 @@ function openEditor(t) {
     f.pods.value = q.pods ?? ''; f.pvcs.value = q.persistentVolumeClaims ?? '';
     f.internet.checked = s.network.internet; f.large.checked = s.controlPlane.size === 'large';
     f.gateway.checked = s.gateway.expose; f.serving.checked = s.observability.dashboards.includes('serving');
-    f.s3.checked = s.s3.enabled; f.management.value = s.management;
+    f.s3.checked = s.s3.enabled; f.teleport.checked = s.access?.teleport ?? false; f.management.value = s.management;
   }
   gpuHint();
   $('#editor').showModal();
@@ -456,6 +456,7 @@ $('#editor-form').addEventListener('submit', async (e) => {
     s3: { enabled: f.s3.checked },
     gateway: { expose: f.gateway.checked },
     observability: { dashboards: f.serving.checked ? ['overview', 'serving'] : ['overview'] },
+    access: { teleport: f.teleport.checked },
   };
   const btn = $('#editor-submit');
   btn.disabled = true;

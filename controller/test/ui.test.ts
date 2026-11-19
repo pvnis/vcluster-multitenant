@@ -11,6 +11,15 @@ test('parseSpec: minimal form -> defaults, Manage', () => {
   assert.deepEqual(s.observability.dashboards, ['overview']);
 });
 
+test('parseSpec: access.teleport is a form toggle (off by default, read from input)', () => {
+  assert.equal(parseSpec({ quota: { gpus: 0, gpuMemoryMiB: 0 } }).access.teleport, false);
+  assert.equal(parseSpec({ quota: { gpus: 0, gpuMemoryMiB: 0 }, access: { teleport: true } }).access.teleport, true);
+  // the form owns it: carryOver must NOT override the submitted value
+  const edited = parseSpec({ quota: { gpus: 0, gpuMemoryMiB: 0 }, access: { teleport: false } });
+  carryOver({ access: { teleport: true } }, edited);
+  assert.equal(edited.access.teleport, false, 'form submission wins over the live value');
+});
+
 test('parseSpec: optional quota lines kept only when given', () => {
   const s = parseSpec({ quota: { gpus: 4, gpuMemoryMiB: 184272, cpu: { requests: '20', limits: '' }, memory: { limits: '160Gi' } } });
   assert.deepEqual(s.quota.cpu, { requests: '20' });
