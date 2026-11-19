@@ -47,7 +47,10 @@ export function lbPoolActions(services: Svc[], granted: boolean): { add: string[
 
 export async function reconcileLoadBalancers(kube: Kube, t: Tenant, mode: Management): Promise<ComponentResult> {
   const ns = t.metadata!.name!;
-  const granted = t.spec.loadBalancers.count > 0 && t.spec.loadBalancers.public;
+  // api.expose also entitles the tenant to a public VIP (its API service), so
+  // it counts as granted even without a loadBalancers.public grant -- otherwise
+  // this would strip the label off the API service and drop its VIP.
+  const granted = (t.spec.loadBalancers.count > 0 && t.spec.loadBalancers.public) || t.spec.api.expose;
   const list = await kube.getPath<{ items?: Svc[] }>(`/api/v1/namespaces/${ns}/services`);
   const { add, remove } = lbPoolActions(list.items ?? [], granted);
 

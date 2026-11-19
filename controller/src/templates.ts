@@ -176,7 +176,9 @@ export class Templates {
       const cp = (values.controlPlane ??= {});
       const svc = (cp.service ??= {});
       svc.spec = { ...(svc.spec ?? {}), type: 'LoadBalancer', loadBalancerIP: t.spec.api.vip, loadBalancerSourceRanges: t.spec.api.sourceRanges };
-      svc.labels = { ...(svc.labels ?? {}), 'midori.phoenix/lb-pool': 'public' };
+      // The midori.phoenix/lb-pool=public label (so LB-IPAM assigns the VIP) is
+      // stamped host-side by the LoadBalancers component, not here -- vCluster
+      // ignores controlPlane.service.labels.
       const proxy = (cp.proxy ??= {});
       // Append to the node-IP SANs from vcluster-midori-tenant.yaml (deepMerge
       // replaces lists, so compute the union here).

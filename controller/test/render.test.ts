@@ -234,7 +234,6 @@ test('api.expose: vcluster API becomes an allowlisted LoadBalancer VIP + cert SA
   assert.equal(vv.controlPlane.service.spec.type, 'LoadBalancer');
   assert.equal(vv.controlPlane.service.spec.loadBalancerIP, '119.15.113.133');
   assert.deepEqual(vv.controlPlane.service.spec.loadBalancerSourceRanges, ['96.248.87.234/32']);
-  assert.equal(vv.controlPlane.service.labels['midori.phoenix/lb-pool'], 'public');
   assert.ok(vv.controlPlane.proxy.extraSANs.includes('119.15.113.133'), 'VIP in cert SANs');
   assert.ok(vv.controlPlane.proxy.extraSANs.includes('10.30.30.31'), 'node SANs kept');
   const r = T.render(tenant('tenant-x', spec));
