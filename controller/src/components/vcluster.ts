@@ -89,9 +89,14 @@ export async function reconcileVCluster(kube: Kube, templates: Templates, t: Ten
   if (kubeconfig) drift.push(kubeconfig);
   const managed = t.spec.management === 'Manage';
   const ok = managed || drift.length === 0;
+  // When the API is exposed externally (api.expose), report the public VIP as
+  // the endpoint (what the dashboard shows and what an external client uses);
+  // otherwise the internal node NodePort. The operator's admin kubeconfig
+  // Secret stays on the NodePort (the VIP is allowlisted to the agent, not cp-0).
+  const apiEndpoint = t.spec.api.expose && t.spec.api.vip ? `https://${t.spec.api.vip}:443` : `https://${API_HOST}:${port}`;
   return {
     drift: managed ? [] : drift,
-    status: { apiNodePort: port, apiEndpoint: `https://${API_HOST}:${port}`, kubeconfigSecret: `${KUBECONFIG_NAMESPACE}/${name}-kubeconfig` },
+    status: { apiNodePort: port, apiEndpoint, kubeconfigSecret: `${KUBECONFIG_NAMESPACE}/${name}-kubeconfig` },
     condition: {
       type: 'VClusterReady',
       status: ok ? 'True' : 'False',
