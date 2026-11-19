@@ -1,0 +1,50 @@
+# Phase 1: the Teleport control plane (Auth + Proxy), standalone, Community/OSS.
+#
+#   helm repo add teleport https://charts.releases.teleport.dev
+#   helm install teleport teleport/teleport-cluster --version <match> -n teleport --create-namespace -f teleport-cluster-values.yaml
+#
+# The Proxy is the ONLY public ingress; Auth is private. Agents dial OUTBOUND to
+# the Proxy (reverse tunnel), so tenant APIs need no inbound exposure.
+
+# The Teleport cluster name == the Proxy's public address (goes in the cert CN/SAN
+# and every agent/client config). DECISION ★: a DNS name under the public range
+# (then enable ACME below) is cleanest; without DNS, use a name + self-signed CA
+# distributed to agents. Placeholder until chosen:
+clusterName: "teleport.midori.phoenix.tyo"
+
+# Standalone: one Auth + one Proxy, local backend on a PVC. (HA = Postgres/etcd +
+# >=2 replicas, later.)
+chartMode: standalone
+# Community/OSS edition (default). Enterprise only for human SSO / Access Requests.
+enterprise: false
+
+proxyListenerMode: multiplex   # one TLS port for web, kube, ssh, tunnel
+
+# Expose the Proxy on a public /26 VIP via Cilium LB-IPAM + BGP (the mechanism we
+# built). ZTNA is identity-gated, so no source-IP allowlist is required -- add one
+# only as defence-in-depth.
+proxy:
+  highAvailability:
+    replicaCount: 1
+  service:
+    type: LoadBalancer
+    # DECISION ★: a free address in 119.15.113.128/26 (e.g. .134). The lb-pool
+    # label (for LB-IPAM) is added to the Service after install -- the `teleport`
+    # namespace is not a tenant namespace, so the controller/guard don't touch it.
+    spec:
+      loadBalancerIP: "119.15.113.134"
+
+# TLS for the Proxy. DECISION ★:
+#  - DNS name available -> acme.enabled: true (Let's Encrypt).
+#  - no DNS / air-gapped -> provide a cert Secret, or let Teleport self-sign and
+#    distribute its CA to agents (tsh/tbot trust it).
+acme:
+  enabled: false
+
+# Local backend persistence (standalone).
+persistence:
+  enabled: true
+  storageClassName: "cephfs"   # RWX CephFS we enabled; or local-path for node-local
+  size: "5Gi"
+
+# Audit log: stays in the local backend for standalone; ship to Loki/S3 later.
