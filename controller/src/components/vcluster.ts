@@ -115,7 +115,10 @@ async function reconcileKubeconfig(kube: Kube, t: Tenant, port: number): Promise
   const target: KubernetesObject = { apiVersion: 'v1', kind: 'Secret', metadata: { name: `${name}-kubeconfig`, namespace: KUBECONFIG_NAMESPACE } };
   if (!src?.data?.config) return undefined; // the release is not up yet
   const cfg = parse(Buffer.from(src.data.config, 'base64').toString()) as any;
-  for (const c of cfg.clusters ?? []) c.cluster.server = `https://${API_HOST}:${port}`;
+  // Point the downloadable kubeconfig at the same endpoint the dashboard shows:
+  // the public VIP when api.expose, else the internal node NodePort.
+  const server = t.spec.api.expose && t.spec.api.vip ? `https://${t.spec.api.vip}:443` : `https://${API_HOST}:${port}`;
+  for (const c of cfg.clusters ?? []) c.cluster.server = server;
   const want: V1Secret = {
     ...(target as V1Secret),
     metadata: { ...target.metadata, labels: { 'midori.phoenix/tenant': name } },
