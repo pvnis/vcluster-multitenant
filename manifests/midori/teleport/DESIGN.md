@@ -5,6 +5,10 @@ humans) **without exposing the API server to the internet** — a per-tenant
 option (`spec.access.teleport`) replacing the `api.expose` public-VIP+allowlist
 path with a zero-trust broker.
 
+**Connecting an agent?** The step-by-step runbook is [AGENT-ACCESS.md](AGENT-ACCESS.md)
+(create a bot, install/run `tbot`, use the kubeconfig, revoke, and the self-signed-cert
+caveats). This file is the architecture and decisions.
+
 ## Why (vs `api.expose`)
 
 `api.expose` trusts a **network location** (source-IP allowlist) and a
