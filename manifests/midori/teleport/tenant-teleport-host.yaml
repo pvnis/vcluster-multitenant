@@ -66,7 +66,8 @@ data:
     ssh_service: { enabled: false }
     kubernetes_service:
       enabled: true
-      kube_cluster_name: TENANT
+      # The kube_cluster name comes from the kubeconfig's context (the controller
+      # names it after the tenant); kube_cluster_name here would conflict with it.
       kubeconfig_file: /etc/kube/kubeconfig
       labels:
         midori/tenant: TENANT

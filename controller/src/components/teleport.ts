@@ -86,12 +86,14 @@ async function buildAgentKubeconfig(vc: Kube, name: string): Promise<KubernetesO
   if (!sec?.data?.token) return undefined; // the token controller has not filled it yet
   const token = Buffer.from(sec.data.token, 'base64').toString();
   const cluster = vc.kc.getCurrentCluster();
+  // The context name becomes the Teleport kube_cluster name, so name it after
+  // the tenant (the agent config omits kube_cluster_name to avoid a conflict).
   const kubeconfig = {
     apiVersion: 'v1', kind: 'Config',
-    clusters: [{ name: 'vc', cluster: { server: cluster?.server, 'certificate-authority-data': sec.data['ca.crt'] } }],
+    clusters: [{ name, cluster: { server: cluster?.server, 'certificate-authority-data': sec.data['ca.crt'] } }],
     users: [{ name: 'teleport', user: { token } }],
-    contexts: [{ name: 'vc', context: { cluster: 'vc', user: 'teleport' } }],
-    'current-context': 'vc',
+    contexts: [{ name, context: { cluster: name, user: 'teleport' } }],
+    'current-context': name,
   };
   return {
     ...kubeconfigSecret(name),

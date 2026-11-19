@@ -261,7 +261,11 @@ test('access.teleport on: host objects present, role scoped to this tenant, prox
   // the agent config carries the substituted proxy host and the kube_cluster name
   const cm = r.present.Teleport.find((o) => o.kind === 'ConfigMap') as any;
   assert.match(cm.data['teleport.yaml'], /proxy_server: teleport\.midori\.phoenix\.tyo:443/);
-  assert.match(cm.data['teleport.yaml'], /kube_cluster_name: tenant-sim/);
+  assert.match(cm.data['teleport.yaml'], /kubeconfig_file: \/etc\/kube\/kubeconfig/);
+  // kube_cluster_name must NOT be set (it conflicts with kubeconfig_file; the
+  // cluster name comes from the kubeconfig context the controller builds)
+  assert.ok(!/^\s*kube_cluster_name:/m.test(cm.data['teleport.yaml']), 'kube_cluster_name must be absent');
+  assert.match(cm.data['teleport.yaml'], /midori\/tenant: tenant-sim/);
   assert.ok(!JSON.stringify(r.present.Teleport).includes('PROXY_'), 'proxy placeholder left');
 });
 
