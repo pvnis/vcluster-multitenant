@@ -6,10 +6,14 @@
 # The Proxy is the ONLY public ingress; Auth is private. Agents dial OUTBOUND to
 # the Proxy (reverse tunnel), so tenant APIs need no inbound exposure.
 
-# The Teleport cluster name == the Proxy's public address (goes in the cert CN/SAN
-# and every agent/client config). DECISION ★: a DNS name under the public range
-# (then enable ACME below) is cleanest; without DNS, use a name + self-signed CA
-# distributed to agents. Placeholder until chosen:
+# The Teleport cluster name == the Proxy's public address (cert CN/SAN, every
+# agent/client config). CHOSEN: option B -- self-signed CA, no DNS. Clients reach
+# the Proxy at this name resolved to the /26 VIP (an /etc/hosts entry or internal
+# DNS) and trust the self-signed CA (`tbot`/`tsh` are given it). Kept as a hostname
+# (not the raw IP) so switching to option A later is just: point real DNS at the
+# VIP + set acme.enabled: true -- no name change, no agent reconfig.
+# TODO(A): once a public DNS record for this name -> 119.15.113.134 exists, enable
+#          acme below for a real Let's Encrypt cert and drop the self-signed CA.
 clusterName: "teleport.midori.phoenix.tyo"
 
 # Standalone: one Auth + one Proxy, local backend on a PVC. (HA = Postgres/etcd +
@@ -34,17 +38,17 @@ proxy:
     spec:
       loadBalancerIP: "119.15.113.134"
 
-# TLS for the Proxy. DECISION ★:
-#  - DNS name available -> acme.enabled: true (Let's Encrypt).
-#  - no DNS / air-gapped -> provide a cert Secret, or let Teleport self-sign and
-#    distribute its CA to agents (tsh/tbot trust it).
+# TLS: option B (self-signed). Teleport self-signs for clusterName on first start;
+# agents trust its CA (exported with `tctl auth export`). Switch to A (ACME) later.
 acme:
   enabled: false
 
-# Local backend persistence (standalone).
+# Local backend persistence (standalone = SQLite). MUST be node-local disk, not a
+# networked FS -- SQLite over CephFS/NFS risks lock corruption. local-path pins the
+# single standalone pod to its node; HA (Postgres) removes this later.
 persistence:
   enabled: true
-  storageClassName: "cephfs"   # RWX CephFS we enabled; or local-path for node-local
+  storageClassName: "local-path"
   size: "5Gi"
 
 # Audit log: stays in the local backend for standalone; ship to Loki/S3 later.
