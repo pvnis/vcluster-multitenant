@@ -1,0 +1,54 @@
+# Phase 2 (manual): a host-side Teleport agent (kubernetes_service) that registers
+# tenant-sim's vCluster as kube_cluster "tenant-sim" via the mounted kubeconfig,
+# dialing OUTBOUND to the Proxy. In ns `teleport`. (Phase 3: rendered per tenant;
+# token comes from a Secret, state persisted — here an emptyDir + 2h token is fine
+# for the proof.)
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: tsim-agent-config, namespace: teleport }
+data:
+  teleport.yaml: |
+    version: v3
+    teleport:
+      nodename: tenant-sim-agent
+      # Reach the Proxy by the name its cert covers (hostAliases maps it to the
+      # Proxy ClusterIP in-cluster); externally this is the real DNS name.
+      proxy_server: teleport.midori.phoenix.tyo:443
+      auth_token: c61de834405f48fe3f96208a9e953dba
+      ca_pin: ["sha256:2de90ec508c758b13ac81cffbb508ba3812fc7188219a2219e1ba581fb6b670f"]
+      log: { output: stderr, severity: INFO }
+    auth_service: { enabled: false }
+    proxy_service: { enabled: false }
+    ssh_service: { enabled: false }
+    kubernetes_service:
+      enabled: true
+      kubeconfig_file: /etc/kube/kubeconfig
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: tsim-agent, namespace: teleport, labels: { app: tsim-agent } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: tsim-agent } }
+  template:
+    metadata: { labels: { app: tsim-agent } }
+    spec:
+      hostAliases:
+      - ip: "10.43.252.198"   # teleport Proxy ClusterIP
+        hostnames: ["teleport.midori.phoenix.tyo"]
+      containers:
+      - name: teleport
+        image: public.ecr.aws/gravitational/teleport-distroless:18.11.12
+        # ENTRYPOINT is `teleport start`; args are extra flags. --insecure skips
+        # chain verification of the SELF-SIGNED Proxy cert on first contact; the
+        # ca_pin still cryptographically pins the real cluster CA at join. Drop
+        # --insecure once option A (real ACME cert) is in place.
+        args: ["--insecure"]
+        volumeMounts:
+        - { name: config, mountPath: /etc/teleport, readOnly: true }
+        - { name: kube, mountPath: /etc/kube, readOnly: true }
+        - { name: data, mountPath: /var/lib/teleport }
+      volumes:
+      - { name: config, configMap: { name: tsim-agent-config } }
+      - { name: kube, secret: { secretName: tsim-kubeconfig } }
+      - { name: data, emptyDir: {} }

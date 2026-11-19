@@ -1,0 +1,20 @@
+# Teleport role for tenant-sim access. Maps the caller to k8s group
+# "teleport:sim-runner" (bound to the sim-runner Role in the vcluster's default
+# ns) and scopes to the `default` namespace. Phase 3 renders one per tenant and
+# label-scopes kubernetes_labels to that tenant's kube_cluster.
+kind: role
+version: v7
+metadata:
+  name: tenant-sim-access
+spec:
+  allow:
+    kubernetes_labels:
+      '*': ['*']
+    kubernetes_groups: ["teleport:sim-runner"]
+    kubernetes_resources:
+      - kind: '*'
+        namespace: 'default'
+        name: '*'
+        verbs: ['*']
+  options:
+    max_session_ttl: 8h

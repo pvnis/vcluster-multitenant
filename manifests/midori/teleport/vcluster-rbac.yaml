@@ -1,0 +1,47 @@
+# Applied INSIDE a tenant's vCluster. The Teleport agent authenticates as the
+# `teleport` SA (impersonation only, no direct access) and impersonates the
+# caller's group; `sim-runner` is the least-privilege Role that group is bound to
+# (Pods/Jobs/ConfigMaps/logs — NO Secrets, NO cluster scope). Phase 3 renders this
+# per tenant from the controller.
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: teleport, namespace: kube-system }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: teleport-impersonator }
+rules:
+- apiGroups: [""]
+  resources: [users, groups, serviceaccounts]
+  verbs: [impersonate]
+- apiGroups: ["authorization.k8s.io"]
+  resources: [selfsubjectaccessreviews, selfsubjectrulesreviews]
+  verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: teleport-impersonator }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: teleport-impersonator }
+subjects: [{ kind: ServiceAccount, name: teleport, namespace: kube-system }]
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: teleport-token
+  namespace: kube-system
+  annotations: { kubernetes.io/service-account.name: teleport }
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: sim-runner, namespace: default }
+rules:
+- apiGroups: ["", "batch", "apps"]
+  resources: [pods, pods/log, pods/exec, jobs, configmaps, deployments, replicasets, services, events]
+  verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: sim-runner, namespace: default }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: sim-runner }
+subjects: [{ apiGroup: rbac.authorization.k8s.io, kind: Group, name: "teleport:sim-runner" }]
