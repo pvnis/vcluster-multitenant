@@ -153,6 +153,69 @@ export class Templates {
     return this.objects('teleport-vcluster.yaml', { TENANT: t.metadata!.name! });
   }
 
+  // A self-describing ConfigMap applied into the vCluster's `default` namespace so
+  // a scoped agent (which can read configmaps but not nodes/quota) can discover HOW
+  // to request GPUs under midori's HAMi + webhook model and WHAT its limits are.
+  // `quota` is the rendered ResourceQuota (effective limits = template + spec).
+  capabilities(t: Tenant, quota: KubernetesObject[]): KubernetesObject {
+    const vendor = t.spec.gpuVendor;
+    const hard = (quota.find((o) => o.kind === 'ResourceQuota') as { spec?: { hard?: Record<string, string> } } | undefined)?.spec?.hard ?? {};
+    const h = (k: string) => hard[k];
+    const nvidia = vendor === 'nvidia';
+
+    const requestKeys = nvidia
+      ? [
+        'Set these on a container\'s resources.limits:',
+        '  nvidia.com/gpu: <count>        # number of (fractional) GPUs',
+        '  nvidia.com/gpumem: <MiB>       # GPU memory per GPU (HAMi); omit for a whole card',
+        '  nvidia.com/gpucores: <0-100>   # % of each GPU\'s SMs (HAMi); 100 = exclusive card',
+        '# Do NOT set midori.phoenix/gpu-memory yourself: the admission webhook derives it',
+        '# from gpumem x gpus and charges it against your quota.',
+      ].join('\n')
+      : [
+        'Set these on a container\'s resources.limits:',
+        '  amd.com/gpu: <count>           # number of GPUs',
+        '  amd.com/gpu-vram-mib: <units>  # VRAM in 512-MiB units',
+      ].join('\n');
+
+    const example = nvidia
+      ? 'apiVersion: v1\nkind: Pod\nmetadata: { name: gpu-job, namespace: default }\nspec:\n  restartPolicy: Never\n  containers:\n  - name: cuda\n    image: <your-image>\n    resources:\n      limits:\n        nvidia.com/gpu: 1\n        nvidia.com/gpumem: 8000\n        nvidia.com/gpucores: 30\n'
+      : 'apiVersion: v1\nkind: Pod\nmetadata: { name: gpu-job, namespace: default }\nspec:\n  restartPolicy: Never\n  containers:\n  - name: rocm\n    image: <your-image>\n    resources:\n      limits:\n        amd.com/gpu: 1\n        amd.com/gpu-vram-mib: 16\n';
+
+    const gpu = nvidia
+      ? [
+        `GPUs (nvidia.com/gpu):          ${h('requests.nvidia.com/gpu') ?? '0'}`,
+        `GPU memory total (MiB):         ${h('requests.midori.phoenix/gpu-memory') ?? '0'}   # charged as midori.phoenix/gpu-memory`,
+        h('requests.nvidia.com/gpucores') ? `GPU cores (% across your GPUs): ${h('requests.nvidia.com/gpucores')}` : 'GPU cores:                      unlimited',
+      ]
+      : [`AMD GPU VRAM (512-MiB units):   ${h('requests.amd.com/gpu-vram-mib') ?? 'unlimited'}`];
+    const quotaText = [
+      ...gpu,
+      `CPU (requests/limits):          ${h('requests.cpu') ?? '-'} / ${h('limits.cpu') ?? '-'}`,
+      `Memory (requests/limits):       ${h('requests.memory') ?? '-'} / ${h('limits.memory') ?? '-'}`,
+      `Pods:                           ${h('pods') ?? '-'}`,
+    ].join('\n') + '\n';
+
+    return {
+      apiVersion: 'v1',
+      kind: 'ConfigMap',
+      metadata: { name: 'tenant-capabilities', namespace: 'default', labels: { 'midori.phoenix/managed': 'true' } },
+      data: {
+        namespace: 'default',
+        'gpu.vendor': vendor,
+        'gpu.request-keys': requestKeys + '\n',
+        'gpu.example.yaml': example,
+        quota: quotaText,
+        'howto.headroom':
+          'Available to you = the quota above MINUS what your running pods already request.\n' +
+          'Compute current usage from your own pods (sum .spec.containers[].resources.requests):\n' +
+          '  kubectl get pods -n default -o json\n' +
+          'Request within the remainder. Over-quota pods are rejected at admission; a pod that\n' +
+          'cannot be scheduled yet stays Pending -- watch:  kubectl get events -n default\n',
+      },
+    } as KubernetesObject;
+  }
+
   // The vCluster's Helm values, merged as `vcluster create --values ...` did.
   vclusterValues(t: Tenant, apiNodePort: number): Record<string, unknown> {
     const overlay: Record<string, unknown> = { controlPlane: { service: { httpsNodePort: apiNodePort } } };

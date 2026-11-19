@@ -49,7 +49,7 @@ export async function reconcileTenant(kube: Kube, templates: Templates, raw: Ten
     ['LoadBalancers', () => reconcileLoadBalancers(kube, t, mode)],
     // After the vCluster (needs its kubeconfig) and LoadBalancers (the Proxy VIP):
     // register the tenant's API with Teleport for zero-trust agent access.
-    ['Teleport', () => reconcileTeleport(kube, templates, t, r.present.Teleport ?? [], r.absent.Teleport ?? [], mode)],
+    ['Teleport', () => reconcileTeleport(kube, templates, t, r.present.Teleport ?? [], r.absent.Teleport ?? [], mode, r.present.Quota ?? [])],
     ['S3', () => reconcileS3(kube, t)],
     ['Metrics', () => reconcileObjects(kube, 'Metrics', r.present.Metrics, [], mode)],
     ['Grafana', () => reconcileGrafana(kube, templates, t)],

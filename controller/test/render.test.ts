@@ -285,6 +285,33 @@ test('teleportVcluster: least-privilege RBAC, group bound, no Secrets verb', () 
   assert.equal(rb.subjects[0].name, 'teleport:tenant-sim-runner');
 });
 
+test('capabilities ConfigMap: GPU request model + quota for a scoped agent (nvidia)', () => {
+  const t = tenant('tenant-nv-a', { quota: { gpus: 4, gpuMemoryMiB: 184272, gpuCores: 200 } });
+  const cm = T.capabilities(t, T.render(t).present.Quota) as any;
+  assert.equal(cm.metadata.name, 'tenant-capabilities');
+  assert.equal(cm.metadata.namespace, 'default');
+  assert.equal(cm.data['gpu.vendor'], 'nvidia');
+  // HAMi keys + the webhook note (the agent must NOT set gpu-memory itself)
+  assert.match(cm.data['gpu.request-keys'], /nvidia\.com\/gpumem/);
+  assert.match(cm.data['gpu.request-keys'], /nvidia\.com\/gpucores/);
+  assert.match(cm.data['gpu.request-keys'], /midori\.phoenix\/gpu-memory/);
+  // quota reflects the RENDERED ResourceQuota (template defaults + spec)
+  assert.match(cm.data.quota, /nvidia\.com\/gpu\):\s+4/);
+  assert.match(cm.data.quota, /GPU memory total \(MiB\):\s+184272/);
+  assert.match(cm.data.quota, /GPU cores.*200/);
+  assert.match(cm.data.quota, /Pods:\s+30/); // from the quota template default
+  assert.match(cm.data['gpu.example.yaml'], /nvidia\.com\/gpu: 1/);
+});
+
+test('capabilities ConfigMap: AMD tenant gets AMD resource keys, no nvidia', () => {
+  const t = tenant('tenant-amd-a', { gpuVendor: 'amd', quota: { gpus: 0, gpuMemoryMiB: 0, amdGpuVramMiB: 8192 } });
+  const cm = T.capabilities(t, T.render(t).present.Quota) as any;
+  assert.equal(cm.data['gpu.vendor'], 'amd');
+  assert.match(cm.data['gpu.request-keys'], /amd\.com\/gpu-vram-mib/);
+  assert.ok(!cm.data['gpu.request-keys'].includes('nvidia.com'), 'no nvidia keys for an amd tenant');
+  assert.match(cm.data.quota, /AMD GPU VRAM.*16/); // 8192 MiB / 512 = 16 units
+});
+
 test('api.expose: vcluster API becomes an allowlisted LoadBalancer VIP + cert SAN; namespace public, quota +1', () => {
   const spec = { api: { expose: true, vip: '119.15.113.133', sourceRanges: ['96.248.87.234/32'] } };
   const vv = T.vclusterValues(tenant('tenant-x', spec), 31000) as any;

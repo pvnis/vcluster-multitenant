@@ -30,6 +30,7 @@ const kubeconfigSecret = (name: string): KubernetesObject => ({
 export async function reconcileTeleport(
   kube: Kube, templates: Templates, t: Tenant,
   presentHost: KubernetesObject[], absentHost: KubernetesObject[], mode: Management,
+  quota: KubernetesObject[] = [],
 ): Promise<ComponentResult> {
   const name = t.metadata!.name!;
   const enabled = t.spec.access.teleport;
@@ -50,10 +51,13 @@ export async function reconcileTeleport(
     condition: { type: 'TeleportReady', status: 'False', reason: 'Pending', message: why },
   });
 
-  // 1. In-vCluster RBAC.
+  // 1. In-vCluster RBAC + the agent-discovery capabilities ConfigMap (so a scoped
+  // agent can learn the GPU request model and its quota — it can read configmaps
+  // but not nodes/quota).
   const vc = await vclusterClient(kube, name);
   if (!vc) return pending('vCluster kubeconfig not ready');
   for (const o of templates.teleportVcluster(t)) await vc.apply(o);
+  await vc.apply(templates.capabilities(t, quota));
 
   // 2. Agent kubeconfig from the impersonator SA token (populated async by k8s).
   const agentKubeconfig = await buildAgentKubeconfig(vc, name);
