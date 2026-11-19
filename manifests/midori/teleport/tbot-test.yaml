@@ -1,0 +1,63 @@
+# Live-path proof: a tbot (Machine ID) initContainer joins the Proxy and writes a
+# kubeconfig for kube_cluster tenant-sim; the main container kubectls THROUGH the
+# Proxy to prove scoped access. hostAlias maps the Proxy name to its ClusterIP.
+#
+# PROVEN with this: tbot generated a short-lived kube identity for tenant-sim
+# (roles=[tenant-sim-access]) and the kubeconfig routes to the Proxy. CAVEAT: tbot's
+# output file is `kubeconfig.yaml` and uses an EXEC credential plugin
+# (/usr/local/bin/tbot) for renewal, so the kubectl container must have the tbot
+# binary too. As an init+main split it does not (alpine/k8s has no tbot) — this is a
+# client-PACKAGING detail, not an architecture gap. Phase 3 runs tbot as a SIDECAR in
+# the agent pod (tbot + app share a filesystem), so the exec-plugin kubeconfig just
+# works and renews continuously. Kept as a reference manifest.
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: tbot-test-config, namespace: teleport }
+data:
+  tbot.yaml: |
+    version: v2
+    onboarding:
+      join_method: token
+      token: 03ab103142b9088c306fa3b21270cb26
+    storage: { type: memory }
+    proxy_server: teleport.midori.phoenix.tyo:443
+    outputs:
+      - type: kubernetes
+        destination: { type: directory, path: /shared }
+        kubernetes_cluster: tenant-sim
+---
+apiVersion: v1
+kind: Pod
+metadata: { name: tbot-test, namespace: teleport }
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false   # no ambient SA fallback — force the tbot kubeconfig
+  hostAliases:
+  - ip: "10.43.252.198"
+    hostnames: ["teleport.midori.phoenix.tyo"]
+  initContainers:
+  - name: tbot
+    image: public.ecr.aws/gravitational/tbot-distroless:18.11.12
+    command: ["/usr/local/bin/tbot"]
+    args: ["start", "-c", "/etc/tbot/tbot.yaml", "--oneshot", "--insecure"]
+    volumeMounts:
+    - { name: config, mountPath: /etc/tbot, readOnly: true }
+    - { name: shared, mountPath: /shared }
+  containers:
+  - name: kubectl
+    image: alpine/k8s:1.31.3
+    command: ["/bin/sh","-c"]
+    args:
+      - |
+        export KUBECONFIG=/shared/kubeconfig.yaml
+        CTX=$(kubectl config get-contexts -o name | head -1); kubectl config use-context "$CTX" >/dev/null
+        echo "== routing through Teleport Proxy, kube_cluster: $CTX =="
+        echo "== get pods -n default (ALLOWED) =="; kubectl get pods -n default
+        echo "== create a job -n default (ALLOWED) =="; kubectl create job hi --image=busybox:1.36 -n default -- true
+        echo "== can-i get secrets -n default (want NO) =="; kubectl auth can-i get secrets -n default
+        echo "== can-i get pods -n kube-system (want NO) =="; kubectl auth can-i get pods -n kube-system
+    volumeMounts:
+    - { name: shared, mountPath: /shared }
+  volumes:
+  - { name: config, configMap: { name: tbot-test-config } }
+  - { name: shared, emptyDir: {} }
