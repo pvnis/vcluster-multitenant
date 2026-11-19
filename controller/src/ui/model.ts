@@ -40,6 +40,8 @@ export function parseSpec(input: any): TenantSpec {
     modelProvider: { enabled: false },
     modelProviders: [],
     loadBalancers: { count: 0, public: false },
+    // Zero-trust Teleport access: a create/edit-form toggle (DESIGN.md).
+    access: { teleport: !!input?.access?.teleport },
   };
   const cpu = { requests: opt(q.cpu?.requests, CPU_RE, 'CPU requests', '"20" or "500m"'), limits: opt(q.cpu?.limits, CPU_RE, 'CPU limits', '"36"') };
   const memory = { requests: opt(q.memory?.requests, MEM_RE, 'Memory requests', '"96Gi"'), limits: opt(q.memory?.limits, MEM_RE, 'Memory limits', '"160Gi"') };

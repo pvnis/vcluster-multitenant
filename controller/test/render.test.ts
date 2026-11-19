@@ -216,7 +216,7 @@ test('load balancers: none by default; count becomes the quota, public the names
 });
 
 test('lbPoolActions: label LoadBalancer services when granted, clear when not, ignore ClusterIP', () => {
-  const svcs = [
+  const svcs: Array<{ metadata: { name: string; labels: Record<string, string> }; spec: { type: string } }> = [
     { metadata: { name: 'lb1', labels: {} }, spec: { type: 'LoadBalancer' } },
     { metadata: { name: 'lb2', labels: { 'midori.phoenix/lb-pool': 'public' } }, spec: { type: 'LoadBalancer' } },
     { metadata: { name: 'cip', labels: {} }, spec: { type: 'ClusterIP' } },
@@ -226,4 +226,57 @@ test('lbPoolActions: label LoadBalancer services when granted, clear when not, i
   // not granted: clear the labelled LB (lb2); lb1 and cip untouched
   assert.deepEqual(lbPoolActions(svcs, false), { add: [], remove: ['lb2'] });
   assert.deepEqual(lbPoolActions([], true), { add: [], remove: [] });
+});
+
+test('access.teleport off (default): host Teleport objects rendered absent, present empty', () => {
+  const r = T.render(tenant('tenant-sim', { quota: { gpus: 1, gpuMemoryMiB: 4096 } }));
+  assert.deepEqual(r.present.Teleport ?? [], []);
+  assert.deepEqual(names(r.absent.Teleport), [
+    'ConfigMap/teleport/tenant-sim-agent',
+    'Deployment/teleport/tenant-sim-agent',
+    'ServiceAccount/teleport/tenant-sim-agent',
+    'TeleportProvisionToken/teleport/tenant-sim-agent',
+    'TeleportRoleV7/teleport/tenant-sim-access',
+  ]);
+});
+
+test('access.teleport on: host objects present, role scoped to this tenant, proxy substituted', () => {
+  const r = T.render(tenant('tenant-sim', { access: { teleport: true } }));
+  assert.deepEqual(r.absent.Teleport ?? [], []);
+  assert.deepEqual(names(r.present.Teleport), [
+    'ConfigMap/teleport/tenant-sim-agent',
+    'Deployment/teleport/tenant-sim-agent',
+    'ServiceAccount/teleport/tenant-sim-agent',
+    'TeleportProvisionToken/teleport/tenant-sim-agent',
+    'TeleportRoleV7/teleport/tenant-sim-access',
+  ]);
+  const role = r.present.Teleport.find((o) => o.kind === 'TeleportRoleV7') as any;
+  assert.deepEqual(role.spec.allow.kubernetes_labels['midori/tenant'], ['tenant-sim']);
+  assert.deepEqual(role.spec.allow.kubernetes_groups, ['teleport:tenant-sim-runner']);
+  assert.equal(role.spec.allow.kubernetes_resources[0].namespace, 'default');
+  // join token uses the kubernetes SA method, allowing only this agent's SA
+  const tok = r.present.Teleport.find((o) => o.kind === 'TeleportProvisionToken') as any;
+  assert.equal(tok.spec.join_method, 'kubernetes');
+  assert.deepEqual(tok.spec.kubernetes.allow, [{ service_account: 'teleport:tenant-sim-agent' }]);
+  // the agent config carries the substituted proxy host and the kube_cluster name
+  const cm = r.present.Teleport.find((o) => o.kind === 'ConfigMap') as any;
+  assert.match(cm.data['teleport.yaml'], /proxy_server: teleport\.midori\.phoenix\.tyo:443/);
+  assert.match(cm.data['teleport.yaml'], /kube_cluster_name: tenant-sim/);
+  assert.ok(!JSON.stringify(r.present.Teleport).includes('PROXY_'), 'proxy placeholder left');
+});
+
+test('teleportVcluster: least-privilege RBAC, group bound, no Secrets verb', () => {
+  const objs = T.teleportVcluster(tenant('tenant-sim', { access: { teleport: true } }));
+  assert.deepEqual(names(objs), [
+    'ClusterRole//teleport-impersonator',
+    'ClusterRoleBinding//teleport-impersonator',
+    'Role/default/tenant-sim-runner',
+    'RoleBinding/default/tenant-sim-runner',
+    'Secret/kube-system/teleport-token',
+    'ServiceAccount/kube-system/teleport',
+  ]);
+  const role = objs.find((o) => o.kind === 'Role') as any;
+  assert.ok(!role.rules.some((ru: any) => (ru.resources ?? []).includes('secrets')), 'runner Role must not grant secrets');
+  const rb = objs.find((o) => o.kind === 'RoleBinding') as any;
+  assert.equal(rb.subjects[0].name, 'teleport:tenant-sim-runner');
 });

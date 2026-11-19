@@ -10,6 +10,12 @@ import { parseAllDocuments, parse } from 'yaml';
 import { deepMerge } from './diff.ts';
 import type { Tenant } from './types.ts';
 
+// The Teleport Proxy the per-tenant agents dial. Env-overridable like API_HOST;
+// PROXY_IP is the Proxy's in-cluster ClusterIP (a hostAlias makes the agent reach
+// the self-signed cert's name). Option A (real DNS) drops the need for PROXY_IP.
+const PROXY_HOST = process.env.TELEPORT_PROXY_HOST ?? 'teleport.midori.phoenix.tyo';
+const PROXY_IP = process.env.TELEPORT_PROXY_IP ?? '10.43.252.198';
+
 export interface Rendered {
   // Objects that must exist, by component.
   present: Record<string, KubernetesObject[]>;
@@ -112,6 +118,11 @@ export class Templates {
     const providers = s.modelProviders.filter((p) => p !== name);
     for (const p of providers) models.push(...consumer(p));
     for (const p of others) if (p !== name && !providers.includes(p)) modelsAbsent.push(...consumer(p));
+    // Teleport host objects (operator CRs + the kube-agent) exist only when the
+    // tenant opts in; otherwise they are rendered absent so Manage removes them.
+    // The in-vCluster RBAC is applied by the Teleport component (a second client),
+    // not here, since render's present/absent target the host cluster.
+    const teleportHost = this.teleportHost(t);
     return {
       present: {
         Namespace: [namespace],
@@ -119,9 +130,22 @@ export class Templates {
         Network: network,
         Models: models,
         Metrics: this.objects('tenant-prom-proxy.yaml', v),
+        Teleport: s.access.teleport ? teleportHost : [],
       },
-      absent: { Network: absent, Models: modelsAbsent },
+      absent: { Network: absent, Models: modelsAbsent, Teleport: s.access.teleport ? [] : teleportHost },
     };
+  }
+
+  // Host-side Teleport objects for a tenant: the operator-managed role + join
+  // token and the kube-agent (ConfigMap + Deployment + its SA).
+  teleportHost(t: Tenant): KubernetesObject[] {
+    return this.objects('teleport-host.yaml', { TENANT: t.metadata!.name!, PROXY_HOST, PROXY_IP });
+  }
+
+  // RBAC applied INSIDE the tenant's vCluster: the impersonator SA + its token
+  // and the least-privilege <tenant>-runner Role the agent impersonates into.
+  teleportVcluster(t: Tenant): KubernetesObject[] {
+    return this.objects('teleport-vcluster.yaml', { TENANT: t.metadata!.name! });
   }
 
   // The vCluster's Helm values, merged as `vcluster create --values ...` did.

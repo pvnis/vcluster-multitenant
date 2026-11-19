@@ -1,0 +1,50 @@
+# Applied INSIDE a tenant's vCluster by the controller's Teleport component when
+# spec.access.teleport is true. The Teleport agent authenticates to the vCluster
+# as the `teleport` SA — which can ONLY impersonate — and impersonates the
+# caller's group; `TENANT-runner` is the least-privilege Role that group is bound
+# to (workloads in `default`: Pods/Jobs/Deployments/logs/exec — NO Secrets, NO
+# cluster scope, NO other namespaces). TENANT is substituted by the controller.
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: teleport, namespace: kube-system }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: teleport-impersonator }
+rules:
+- apiGroups: [""]
+  resources: [users, groups, serviceaccounts]
+  verbs: [impersonate]
+- apiGroups: ["authorization.k8s.io"]
+  resources: [selfsubjectaccessreviews, selfsubjectrulesreviews]
+  verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: teleport-impersonator }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: teleport-impersonator }
+subjects: [{ kind: ServiceAccount, name: teleport, namespace: kube-system }]
+---
+# A long-lived token for the impersonator SA; the controller reads it to build
+# the agent's kubeconfig. Impersonation-only, so this token grants no direct access.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: teleport-token
+  namespace: kube-system
+  annotations: { kubernetes.io/service-account.name: teleport }
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: TENANT-runner, namespace: default }
+rules:
+- apiGroups: ["", "batch", "apps"]
+  resources: [pods, pods/log, pods/exec, jobs, configmaps, deployments, replicasets, services, events]
+  verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: TENANT-runner, namespace: default }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: TENANT-runner }
+subjects: [{ apiGroup: rbac.authorization.k8s.io, kind: Group, name: "teleport:TENANT-runner" }]

@@ -1,0 +1,105 @@
+# Applied on the HOST (ns teleport) by the controller's Teleport component when
+# spec.access.teleport is true. Substitutions: TENANT, PROXY_HOST, PROXY_IP.
+#
+# The TeleportRole/TeleportProvisionToken are custom resources reconciled by the
+# teleport-operator (deployed with the teleport-cluster chart) into the Teleport
+# Auth — so the controller manages Teleport state declaratively, no tctl. The
+# agent registers the tenant's vCluster as kube_cluster "TENANT" over an OUTBOUND
+# reverse tunnel; its kubeconfig (Secret TENANT-teleport-kubeconfig) is
+# built by the controller from the vCluster's impersonator-SA token.
+
+# Least-privilege Teleport role: callers are mapped to k8s group
+# teleport:TENANT-runner and confined to this tenant's kube_cluster (label
+# midori/tenant=TENANT) and its `default` namespace.
+apiVersion: resources.teleport.dev/v1
+kind: TeleportRoleV7
+metadata:
+  name: TENANT-access
+  namespace: teleport
+spec:
+  allow:
+    kubernetes_labels:
+      midori/tenant: ["TENANT"]
+    kubernetes_groups: ["teleport:TENANT-runner"]
+    kubernetes_resources:
+      - kind: '*'
+        namespace: default
+        name: '*'
+        verbs: ['*']
+  options:
+    max_session_ttl: 8h0m0s
+---
+# Join token using the KUBERNETES join method: the agent proves its identity with
+# its own in-cluster ServiceAccount JWT — no shared secret to mint, store or leak.
+apiVersion: resources.teleport.dev/v2
+kind: TeleportProvisionToken
+metadata:
+  name: TENANT-agent
+  namespace: teleport
+spec:
+  roles: ["Kube"]
+  join_method: kubernetes
+  kubernetes:
+    type: in_cluster
+    allow:
+      - service_account: "teleport:TENANT-agent"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: TENANT-agent, namespace: teleport }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: TENANT-agent, namespace: teleport }
+data:
+  teleport.yaml: |
+    version: v3
+    teleport:
+      nodename: TENANT-agent
+      proxy_server: PROXY_HOST:443
+      join_params:
+        method: kubernetes
+        token_name: TENANT-agent
+      log: { output: stderr, severity: INFO }
+    auth_service: { enabled: false }
+    proxy_service: { enabled: false }
+    ssh_service: { enabled: false }
+    kubernetes_service:
+      enabled: true
+      kube_cluster_name: TENANT
+      kubeconfig_file: /etc/kube/kubeconfig
+      labels:
+        midori/tenant: TENANT
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: TENANT-agent
+  namespace: teleport
+  labels: { app: TENANT-agent, midori/tenant: TENANT }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: TENANT-agent } }
+  template:
+    metadata: { labels: { app: TENANT-agent, midori/tenant: TENANT } }
+    spec:
+      serviceAccountName: TENANT-agent
+      # Reach the Proxy by the name its (self-signed) cert covers; in-cluster
+      # that name resolves to the Proxy's ClusterIP. Drop with option A (real DNS).
+      hostAliases:
+      - ip: "PROXY_IP"
+        hostnames: ["PROXY_HOST"]
+      containers:
+      - name: teleport
+        image: public.ecr.aws/gravitational/teleport-distroless:18.11.12
+        # ENTRYPOINT is `teleport start`; --insecure skips chain verification of
+        # the SELF-SIGNED Proxy cert. Remove once option A (ACME cert) is in place.
+        args: ["--insecure"]
+        volumeMounts:
+        - { name: config, mountPath: /etc/teleport, readOnly: true }
+        - { name: kube, mountPath: /etc/kube, readOnly: true }
+        - { name: data, mountPath: /var/lib/teleport }
+      volumes:
+      - { name: config, configMap: { name: TENANT-agent } }
+      - { name: kube, secret: { secretName: TENANT-teleport-kubeconfig } }
+      - { name: data, emptyDir: {} }

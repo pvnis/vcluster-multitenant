@@ -50,6 +50,12 @@ export interface TenantSpec {
   // whether they may take a public floating IP
   // (manifests/midori/load-balancer-guard.yaml).
   loadBalancers: { count: number; public: boolean };
+  // Zero-trust access to this tenant's k8s API via Teleport (manifests/midori/
+  // teleport/DESIGN.md): identity-based, audited, NO public API surface (the
+  // agent dials outbound). When true the controller registers the vCluster as a
+  // Teleport kube_cluster with a least-privilege role; agents join with Machine
+  // ID (tbot). The preferred alternative to `api.expose`'s public VIP.
+  access: { teleport: boolean };
 }
 
 export interface Condition {
@@ -74,6 +80,8 @@ export interface TenantStatus {
   apiEndpoint?: string;
   apiNodePort?: number;
   kubeconfigSecret?: string;
+  // The Teleport kube_cluster this tenant is registered as (spec.access.teleport).
+  teleportCluster?: string;
   grafana?: { org?: number; user?: string };
   conditions?: Condition[];
   driftCount?: number;
@@ -110,6 +118,7 @@ export function withDefaults(t: Tenant): Tenant {
       modelProvider: { enabled: s.modelProvider?.enabled ?? false },
       modelProviders: s.modelProviders ?? [],
       loadBalancers: { count: s.loadBalancers?.count ?? 0, public: s.loadBalancers?.public ?? false },
+      access: { teleport: s.access?.teleport ?? false },
     },
   };
 }

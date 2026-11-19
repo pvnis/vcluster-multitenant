@@ -9,6 +9,7 @@ import { deleteVCluster, reconcileVCluster } from './components/vcluster.ts';
 import { reconcileS3, removeKey } from './components/s3.ts';
 import { reconcileLoadBalancers } from './components/loadbalancers.ts';
 import { deleteGrafana, reconcileGrafana } from './components/grafana.ts';
+import { deleteTeleport, reconcileTeleport } from './components/teleport.ts';
 import { deleteCredentials } from './components/credentials.ts';
 import {
   ALLOW_DELETE, FINALIZER, withDefaults,
@@ -46,6 +47,9 @@ export async function reconcileTenant(kube: Kube, templates: Templates, raw: Ten
     // After the vCluster: its syncer is what creates the host LoadBalancer
     // Services this labels for a fabric VIP.
     ['LoadBalancers', () => reconcileLoadBalancers(kube, t, mode)],
+    // After the vCluster (needs its kubeconfig) and LoadBalancers (the Proxy VIP):
+    // register the tenant's API with Teleport for zero-trust agent access.
+    ['Teleport', () => reconcileTeleport(kube, templates, t, r.present.Teleport ?? [], r.absent.Teleport ?? [], mode)],
     ['S3', () => reconcileS3(kube, t)],
     ['Metrics', () => reconcileObjects(kube, 'Metrics', r.present.Metrics, [], mode)],
     ['Grafana', () => reconcileGrafana(kube, templates, t)],
@@ -126,6 +130,9 @@ async function handleDeletion(kube: Kube, templates: Templates, t: Tenant): Prom
   // interrupted halfway resumes on the next reconcile.
   await deleteGrafana(kube, name);
   await removeKey(kube, name);
+  // Remove the host-side Teleport objects (operator role/token CRs + agent)
+  // before the vCluster goes; the in-vCluster RBAC dies with the vCluster.
+  await deleteTeleport(kube, templates, t);
   for (const o of r.present.Metrics) await kube.delete(o);
   // Broker and consumer objects outside the tenant's namespace do not go with
   // it; the shared model-providers Namespace itself stays.

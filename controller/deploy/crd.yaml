@@ -139,6 +139,14 @@ spec:
                   # May a Service ask for a public floating IP
                   # (annotation service.beta.kubernetes.io/openstack-internal-load-balancer: "false")?
                   public: { type: boolean, default: false }
+              access:
+                type: object
+                default: {}
+                properties:
+                  # Register this tenant's k8s API with Teleport for zero-trust,
+                  # identity-based, audited agent access with no public API VIP
+                  # (manifests/midori/teleport/DESIGN.md). Preferred over api.expose.
+                  teleport: { type: boolean, default: false }
               modelProviders:
                 type: array
                 default: []

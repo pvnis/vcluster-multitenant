@@ -17,6 +17,8 @@ kubectl create configmap tenant-templates -n tenant-system --dry-run=client -o y
   --from-file=gateway-ingress.yaml="$R/manifests/midori/phoenix/gateway-ingress.yaml" \
   --from-file=model-provider.yaml="$R/manifests/midori/model-provider.yaml" \
   --from-file=model-consumer.yaml="$R/manifests/midori/model-consumer.yaml" \
+  --from-file=teleport-host.yaml="$R/manifests/midori/teleport/tenant-teleport-host.yaml" \
+  --from-file=teleport-vcluster.yaml="$R/manifests/midori/teleport/tenant-teleport-vcluster.yaml" \
   --from-file=vcluster-tenant.yaml="$R/values/tenant.yaml" \
   --from-file=vcluster-nv-tenant.yaml="$R/values/nv-tenant.yaml" \
   --from-file=vcluster-midori-tenant.yaml="$R/values/midori-tenant.yaml" \
