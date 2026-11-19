@@ -161,6 +161,41 @@ destination dir. An agent packaged as a pod runs `tbot` as a sidecar sharing a v
 
 ---
 
+## 6b. Discovering resources and limits (how an agent knows what to ask for)
+
+A scoped agent can't `get nodes` or read its `ResourceQuota` (enforced host-side,
+not in the vCluster), and it can't guess midori's GPU request model. So the
+controller publishes a self-describing **`tenant-capabilities`** ConfigMap into the
+vCluster's `default` namespace — the agent reads it with the `configmaps` grant it
+already has:
+
+```bash
+kubectl get configmap tenant-capabilities -n default -o yaml
+```
+
+It contains, per tenant:
+- `gpu.vendor` — `nvidia` or `amd`;
+- `gpu.request-keys` — the exact keys to set on `resources.limits` and their
+  semantics. **NVIDIA/HAMi:** `nvidia.com/gpu` (fractional GPU count),
+  `nvidia.com/gpumem` (MiB per GPU), `nvidia.com/gpucores` (% SMs; 100 = exclusive).
+  You do **not** set `midori.phoenix/gpu-memory` — the gVisor admission webhook
+  derives it from `gpumem × gpus` and charges it to your quota. **AMD:**
+  `amd.com/gpu` + `amd.com/gpu-vram-mib` (512-MiB units).
+- `gpu.example.yaml` — a ready-to-apply GPU pod;
+- `quota` — your effective limits (GPUs, GPU-memory total, CPU, memory, pods);
+- `howto.headroom` — how to compute what's free.
+
+**"What's available to allocate" = your quota − your current usage.** No cluster-wide
+view is needed (nor exposed): sum the requests of your own running pods and subtract
+from the quota.
+
+```bash
+kubectl get pods -n default -o json   # sum .spec.containers[].resources.requests
+```
+
+Over-quota pods are rejected at admission; a pod that can't be scheduled yet stays
+`Pending` — watch `kubectl get events -n default`.
+
 ## 7. Operations
 
 - **Audit** — everything the agent does is recorded:
