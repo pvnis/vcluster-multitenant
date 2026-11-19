@@ -103,3 +103,40 @@ public API VIP is unnecessary (keep `api.expose` only as allowlisted break-glass
 HA Teleport; human SSO; Access Requests/approvals; app/DB access (Teleport also
 brokers those — future); retiring `api.expose` (keep as break-glass until Teleport
 is proven).
+
+## Alternatives considered: Teleport vs OpenZiti (for later review)
+
+Raised 2026-11-19: since our access is machine-to-machine (autonomous agents, not
+humans), is an overlay mesh like **OpenZiti** a better fit than Teleport? Captured
+here for a future revisit; **decision for now: keep Teleport** for this problem.
+
+The real split: OpenZiti is a **protocol-agnostic zero-trust overlay mesh** (secure
+any TCP/UDP; embed an SDK so services have zero inbound ports; fully Apache-2.0).
+Teleport is a **protocol-aware access broker** (understands SSH/k8s/DB/RDP/web; open-
+core, Community = Apache-2.0). "Teleport = humans only" is outdated: **Machine ID
+(`tbot`)** is first-class machine identity (issues SPIFFE SVIDs too) — that's what our
+agents use.
+
+Why Teleport fits *this* problem (agents → a tenant's **Kubernetes API**, scoped +
+audited + no inbound):
+- The target is the **k8s API**, a protocol Teleport is deeply aware of, so we get for
+  free: k8s-native least-privilege (role → kube_group → namespaced RBAC Role),
+  **kubectl-level audit** (verb/resource/namespace — exactly the accountability an
+  autonomous-agent platform wants), and per-request L7 authz. OpenZiti would secure the
+  *connection* to the API port but is protocol-agnostic — k8s authz + audit would be
+  bolted on separately.
+- The "no inbound / dark service" property we **already have**: the kube-agent dials
+  OUTBOUND (reverse tunnel); the single Teleport Proxy VIP is the only ingress — for a
+  multi-tenant platform, one hardened, audited choke point is a feature.
+- Our entire usage (Machine ID, k8s access, RBAC scoping, audit) is in Teleport
+  **Community (Apache-2.0)**; the Enterprise wall is human-governance (SSO beyond GitHub,
+  Access Requests, device trust, per-session MFA, FedRAMP) we don't use.
+
+Reconsider / add **OpenZiti** only if the requirement changes shape: agents need
+**arbitrary tenant services over arbitrary protocols** (general mesh, not just the kube
+API); zero-trust **embedded in agent/app code via SDK** (truly dark, no agent/proxy hop);
+**edge/IoT** or hybrid-cloud machine-to-machine networking; or a hard **no-open-core**
+principle. Stack note: in our architecture OpenZiti would overlap **Cilium** (the CNI /
+network-policy / BGP layer), not Teleport — so "use both" for us is really *Cilium
+(fabric) + Teleport (k8s access broker)*, which is what we have, unless cross-tenant
+service-to-service networking becomes a real requirement.
