@@ -104,9 +104,24 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: tenant-ui, namespace: tenant-system }
+metadata:
+  name: tenant-ui
+  namespace: tenant-system
+  # Public fabric VIP from the /26 pool (Cilium LB-IPAM + BGP). The lb-pool
+  # label selects the pool. tenant-system is outside the load-balancer guard
+  # (its namespaceSelector requires a `tenant` label), so the label is free here.
+  labels: { midori.phoenix/lb-pool: public }
 spec:
-  type: NodePort
+  type: LoadBalancer
+  # Pinned so the operator console keeps the same VIP across recreation.
+  loadBalancerIP: 119.15.113.129
+  # Operator-only console. Source-IP allowlist enforced in Cilium's eBPF
+  # datapath: the operator's public IP, and the admin VPN subnet 10.0.105.0/24
+  # (a private range, so it matches only over the VPN, where the source IP is
+  # preserved — a NAT'd public source would not match).
+  loadBalancerSourceRanges:
+    - 96.248.87.234/32
+    - 10.0.105.0/24
   selector: { app: tenant-ui }
   ports: [{ port: 80, targetPort: 8080, nodePort: 30310 }]
 ---
