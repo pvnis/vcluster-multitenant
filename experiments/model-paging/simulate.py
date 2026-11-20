@@ -61,7 +61,13 @@ class Record:
     stalled: bool = False
 
 
-def simulate(manager: ResidencyManager, requests, compute: ComputeModel):
+def simulate(manager: ResidencyManager, requests, compute: ComputeModel,
+             wake: str = "blocking"):
+    """wake='blocking': a miss waits the full weight DMA, then prefills (stock
+    vLLM wake_up): the cold cost is fault + prefill. wake='overlap': the streaming
+    engine change — the weight DMA runs on a copy stream while prefill computes
+    layer-by-layer as each layer's weights land, so the cold cost is
+    max(fault, prefill). Hits cost only prefill in both."""
     reqs = sorted(requests, key=lambda r: r.arrival)
     server_free = 0.0
     records = []
@@ -75,15 +81,20 @@ def simulate(manager: ResidencyManager, requests, compute: ComputeModel):
             continue
         manager.pin(r.model.name)
         prefill = compute.prefill_s(r.model, r.prompt_tokens)
-        service = fault + prefill          # decode overlaps via batching
-        finish = start + service
+        if fault == 0.0:
+            added = prefill                       # hit
+        elif wake == "overlap":
+            added = max(fault, prefill)           # DMA || prefill
+        else:
+            added = fault + prefill               # blocking wake
+        finish = start + added
         manager.unpin(r.model.name)
         server_free = finish
         records.append(Record(
             model=r.model.name, tenant=r.model.tenant,
             hit=(fault == 0.0), fault_s=fault,
             queue_s=start - r.arrival,
-            ttft_s=(start - r.arrival) + fault + prefill,
+            ttft_s=(start - r.arrival) + added,
         ))
     return records, reqs
 
@@ -96,7 +107,7 @@ def _pct(xs, p):
     return s[i]
 
 
-def summarize(manager, records, reqs, models, budget):
+def summarize(manager, records, reqs, models, budget, slo_s=None):
     served = [r for r in records if not r.stalled]
     stalls = sum(1 for r in records if r.stalled)
     ttft = [r.ttft_s for r in served]
@@ -126,6 +137,8 @@ def summarize(manager, records, reqs, models, budget):
         "gib_faulted": round(manager.mib_faulted / 1024, 1),
         "resident_end": len(manager.resident),
         "throughput_rps": round(len(served) / makespan, 2) if makespan else 0.0,
+        "goodput": (round(sum(1 for t in ttft if t <= slo_s) / len(ttft), 3)
+                    if (slo_s and ttft) else None),
     }
 
 
@@ -140,6 +153,35 @@ def make_policy(name):
     return {"cost": CostAwareLRU, "freq": FrequencyCost, "lru": LRU}.get(name, LRU)()
 
 
+def wake_slo_analysis(models, trace, compute, slo_s, target, policy_name):
+    """Sweep overcommit for blocking vs overlap (streaming) wake and report
+    goodput (fraction of requests meeting the TTFT SLO) + the max overcommit each
+    sustains at the target goodput. Answers: how much can we overcommit and still
+    have decent performance, and how much more the engine change buys."""
+    total = workload.total_weight_mib(models)
+    max_size = max(m.size_mib for m in models)
+    print(f"\n=== overcommit vs performance (TTFT SLO={slo_s*1000:.0f}ms, "
+          f"target goodput={target:.0%}, policy={policy_name}) ===")
+    hdr = ("overcommit", "budget_MiB", "gp_blocking", "gp_overlap",
+           "p99_blk_ms", "p99_ovl_ms")
+    print("  " + "  ".join(f"{h:>11}" for h in hdr))
+    best = {"blocking": 1.0, "overlap": 1.0}
+    for ratio in (1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0):
+        b = max(max_size, int(total / ratio))
+        got = {}
+        for wake in ("blocking", "overlap"):
+            m = ResidencyManager(b, DEFAULT_TIERS, policy=make_policy(policy_name))
+            recs, rq = simulate(m, trace, compute, wake=wake)
+            got[wake] = summarize(m, recs, rq, models, b, slo_s)
+            if got[wake]["goodput"] is not None and got[wake]["goodput"] >= target:
+                best[wake] = max(best[wake], got[wake]["overcommit_x"])
+        row = (f"{ratio:.1f}x", b, got["blocking"]["goodput"], got["overlap"]["goodput"],
+               got["blocking"]["ttft_p99_ms"], got["overlap"]["ttft_p99_ms"])
+        print("  " + "  ".join(f"{str(v):>11}" for v in row))
+    print(f"  --> max overcommit at goodput >= {target:.0%}: "
+          f"blocking {best['blocking']}x, overlap {best['overlap']}x")
+
+
 def run_scenario(args):
     rng = random.Random(args.seed)
     models = workload.make_models(
@@ -150,11 +192,13 @@ def run_scenario(args):
         models, args.requests, args.rate, args.cv, args.skew,
         args.prompt_mean, args.output_mean, rng)
     compute = ComputeModel()
+    slo_s = args.slo_ms / 1000.0
 
     mgr = ResidencyManager(args.budget, DEFAULT_TIERS, policy=make_policy(args.policy))
-    records, reqs = simulate(mgr, trace, compute)
-    _print_summary(f"scenario (budget={args.budget} MiB, policy={args.policy})",
-                   summarize(mgr, records, reqs, models, args.budget))
+    records, reqs = simulate(mgr, trace, compute, wake=args.wake)
+    _print_summary(
+        f"scenario (budget={args.budget} MiB, policy={args.policy}, wake={args.wake})",
+        summarize(mgr, records, reqs, models, args.budget, slo_s))
 
     if args.nvme_frac > 0:
         print("\n=== policy comparison (same trace & budget, "
@@ -181,6 +225,8 @@ def run_scenario(args):
                    s["ttft_p99_ms"], s["evict_per_req"], s["stalls"])
             print("  " + "  ".join(f"{str(v):>11}" for v in row))
 
+    wake_slo_analysis(models, trace, compute, slo_s, args.goodput, args.policy)
+
 
 def build_parser():
     p = argparse.ArgumentParser(description="Model-paging POC simulator")
@@ -204,6 +250,13 @@ def build_parser():
                         "'freq' is the frequency+cost admission model (scan-resistant)")
     p.add_argument("--nvme-frac", type=float, default=0.0, dest="nvme_frac",
                    help="fraction of masters on NVMe (enables the policy comparison)")
+    p.add_argument("--wake", choices=["blocking", "overlap"], default="blocking",
+                   help="blocking = stock vLLM wake_up; overlap = streaming wake "
+                        "(weight DMA || prefill, the engine change)")
+    p.add_argument("--slo-ms", type=float, default=2000.0, dest="slo_ms",
+                   help="per-request TTFT SLO for the goodput analysis")
+    p.add_argument("--goodput", type=float, default=0.95,
+                   help="target fraction of requests meeting the SLO")
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--sweep", action="store_true", default=True)
     p.add_argument("--no-sweep", action="store_false", dest="sweep")
