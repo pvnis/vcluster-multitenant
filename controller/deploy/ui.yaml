@@ -122,6 +122,7 @@ spec:
   loadBalancerSourceRanges:
     - 96.248.87.234/32
     - 10.0.105.0/24
+    - 157.107.16.107/32
   selector: { app: tenant-ui }
   ports: [{ port: 80, targetPort: 8080, nodePort: 30310 }]
 ---
