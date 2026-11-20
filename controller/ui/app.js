@@ -79,6 +79,7 @@ function statusChips(t) {
 let data = { tenants: [], capacity: {} };
 let openTenant = null;      // name shown in the detail drawer
 let revealed = null;        // credentials fetched for openTenant
+let tp = { tenant: null, agents: null, issued: null };  // Teleport agents + last-issued token, per open tenant
 let timer = null;
 
 // ---------- login ----------------------------------------------------------------
@@ -349,6 +350,8 @@ function renderDetail(t) {
     drift.length ? [h('h3', { text: 'Drift' }), h('p', { class: 'muted', text: s.management === 'Observe' ? 'What applying the spec would change.' : 'Changed behind the controller; restored on its next pass.' }), h('ul', { class: 'conds' }, drift)] : null,
     h('h3', { text: 'Hand over' }),
     handover(t),
+    s.access?.teleport ? h('h3', { text: 'Teleport agent access' }) : null,
+    s.access?.teleport ? teleportBox(t) : null,
     h('div', { class: 'toolbar' },
       h('button', { class: 'primary', type: 'button', text: 'Edit', disabled: t.deleting, onclick: () => openEditor(t) }),
       h('button', { class: 'ghost', type: 'button', disabled: t.deleting, text: s.management === 'Manage' ? 'Switch to Observe' : 'Switch to Manage', onclick: () => switchMode(t) })),
@@ -386,6 +389,50 @@ function handover(t) {
     copyField('Grafana URL', revealed.grafana.url), copyField('Grafana user', revealed.grafana.user), copyField('Grafana password', revealed.grafana.password),
     copyField('S3 endpoint', revealed.s3.endpoint), copyField('S3 access key', revealed.s3.accessKey), copyField('S3 secret key', revealed.s3.secretKey)),
   h('div', { class: 'toolbar' }, download, h('button', { class: 'link', type: 'button', text: 'Hide', onclick: () => { revealed = null; renderDetail(t); } })));
+  return box;
+}
+
+function loadTpAgents(t) {
+  api('GET', `/api/tenants/${encodeURIComponent(t.name)}/teleport-agents`)
+    .then((r) => { if (tp.tenant === t.name) { tp.agents = r.agents || []; renderDetail(t); } })
+    .catch(() => { if (tp.tenant === t.name) { tp.agents = []; renderDetail(t); } });
+}
+
+function teleportBox(t) {
+  const name = encodeURIComponent(t.name);
+  // Reset + load when a different tenant opens (avoids a render loop: the guard
+  // means loadTpAgents is kicked once per tenant, not on every re-render).
+  if (tp.tenant !== t.name) { tp = { tenant: t.name, agents: null, issued: null }; loadTpAgents(t); }
+  const box = h('div', {});
+  box.append(h('p', { class: 'muted', text: 'Mint a Machine ID (tbot) join token for an agent and hand it to the tenant out of band — the tenant has no access until it holds one. Issuing is recorded in the audit log.' }));
+
+  if (tp.agents === null) box.append(h('p', { class: 'muted', text: 'Loading agents…' }));
+  else if (tp.agents.length) box.append(h('ul', { class: 'conds' }, tp.agents.map((a) =>
+    h('li', {}, h('span', { class: 'mono', text: a.agent }), ' ',
+      h('button', { class: 'link', type: 'button', text: 'Revoke', onclick: async () => {
+        if (!confirm(`Revoke agent "${a.agent}"? Its tbot loses access immediately.`)) return;
+        try { await api('DELETE', `/api/tenants/${name}/teleport-agents/${encodeURIComponent(a.agent)}`); if (tp.issued && tp.issued.agent === a.agent) tp.issued = null; loadTpAgents(t); }
+        catch (e) { alert(e.message); }
+      } })))));
+  else box.append(h('p', { class: 'muted', text: 'No agents yet.' }));
+
+  const input = h('input', { placeholder: 'agent name, e.g. sim-runner', 'aria-label': 'agent name' });
+  box.append(h('div', { class: 'toolbar' }, input,
+    h('button', { class: 'primary', type: 'button', text: 'Generate join token', onclick: async () => {
+      try { tp.issued = await api('POST', `/api/tenants/${name}/teleport-agents`, { agent: input.value.trim() }); loadTpAgents(t); }
+      catch (e) { alert(e.message); }
+    } })));
+
+  if (tp.issued) {
+    const i = tp.issued;
+    box.append(
+      h('p', { class: 'note', text: `Join token for “${i.agent}” — hand it to the tenant now; re-issuing replaces it.` }),
+      h('dl', { class: 'kv' }, copyField('Join token', i.token), copyField('Proxy', i.proxy), copyField('kube_cluster', i.kubeCluster)),
+      h('p', { class: 'muted', text: 'tbot.yaml — run it with `tbot start -c tbot.yaml --insecure`; while the Proxy cert is self-signed, add this to the agent host’s /etc/hosts:' }),
+      h('pre', { class: 'mono', text: `${i.vip}  teleport.midori.phoenix.tyo` }),
+      h('pre', { class: 'mono', text: i.config }),
+      h('div', { class: 'toolbar' }, h('button', { class: 'link', type: 'button', text: 'Hide', onclick: () => { tp.issued = null; renderDetail(t); } })));
+  }
   return box;
 }
 

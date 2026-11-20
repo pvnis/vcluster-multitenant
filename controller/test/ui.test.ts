@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Invalid, capacity, carryOver, newTenant, parseSpec, specPatch, toNumber } from '../src/ui/model.ts';
+import { BadAgent, botCR, tbotConfig, tokenCR, validateAgent } from '../src/ui/teleport.ts';
 import { hashPassword, verifyPassword } from '../src/ui/auth.ts';
 
 test('parseSpec: minimal form -> defaults, Manage', () => {
@@ -18,6 +19,34 @@ test('parseSpec: access.teleport is a form toggle (off by default, read from inp
   const edited = parseSpec({ quota: { gpus: 0, gpuMemoryMiB: 0 }, access: { teleport: false } });
   carryOver({ access: { teleport: true } }, edited);
   assert.equal(edited.access.teleport, false, 'form submission wins over the live value');
+});
+
+test('teleport: agent name validation', () => {
+  assert.equal(validateAgent('sim-runner'), 'sim-runner');
+  assert.throws(() => validateAgent('Bad_Name'), BadAgent);
+  assert.throws(() => validateAgent('-x'), BadAgent);
+  assert.throws(() => validateAgent(''), BadAgent);
+});
+
+test('teleport: bot + token CRs scoped to the tenant role; token value is the CR name', () => {
+  const bot = botCR('tenant-sim', 'runner') as any;
+  assert.equal(bot.kind, 'TeleportBotV1');
+  assert.equal(bot.metadata.name, 'tenant-sim-runner');
+  assert.equal(bot.metadata.namespace, 'teleport');
+  assert.deepEqual(bot.spec.roles, ['tenant-sim-access']);
+  const tok = tokenCR('tenant-sim', 'runner', 'abc123') as any;
+  assert.equal(tok.kind, 'TeleportProvisionToken');
+  assert.equal(tok.metadata.name, 'abc123');
+  assert.equal(tok.spec.join_method, 'token');
+  assert.deepEqual(tok.spec.roles, ['Bot']);
+  assert.equal(tok.spec.bot_name, 'tenant-sim-runner');
+});
+
+test('teleport: tbot config carries token, proxy, kube_cluster', () => {
+  const c = tbotConfig('tenant-sim', 'tok123');
+  assert.match(c, /token: tok123/);
+  assert.match(c, /proxy_server: teleport\.midori\.phoenix\.tyo:443/);
+  assert.match(c, /kubernetes_cluster: tenant-sim/);
 });
 
 test('parseSpec: optional quota lines kept only when given', () => {

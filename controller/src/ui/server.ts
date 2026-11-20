@@ -10,6 +10,9 @@
 //   DELETE /api/tenants/:name {confirm}    annotate allow-delete, then delete
 //   GET    /api/tenants/:name/credentials  Grafana login + S3 key (audited)
 //   GET    /api/tenants/:name/kubeconfig   download (audited)
+//   GET    /api/tenants/:name/teleport-agents          list agents (bots)
+//   POST   /api/tenants/:name/teleport-agents {agent}  issue a join token (audited, revealed once)
+//   DELETE /api/tenants/:name/teleport-agents/:agent   revoke an agent (audited)
 //
 // It can only write Tenants (see deploy/ui.yaml for its RBAC); the controller
 // does everything else. Every request except /api/login and the static files
@@ -25,6 +28,7 @@ import { ALLOW_DELETE, GROUP, VERSION, type Tenant } from '../types.ts';
 import { Auth } from './auth.ts';
 import { Invalid, NAME_RE, capacity, carryOver, newTenant, parseSpec, specPatch, tenantView } from './model.ts';
 import { gpuMemory } from './promql.ts';
+import { BadAgent, issueAgentToken, listAgents, revokeAgent } from './teleport.ts';
 
 const PORT = Number(process.env.UI_PORT ?? 8080);
 const STATIC = process.env.UI_DIR ?? join(import.meta.dirname, '../../ui');
@@ -158,6 +162,33 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string): Pro
     await kube.apply(t, false, MANAGER);
     audit(user, 'create', t.metadata!.name, { spec: t.spec });
     return send(res, 201, { name: t.metadata!.name });
+  }
+
+  // Teleport agent (Machine ID) tokens: list, issue (reveal once), revoke. The
+  // operator hands the issued token to the tenant out of band.
+  const tm = /^\/api\/tenants\/([^/]+)\/teleport-agents(?:\/([^/]+))?$/.exec(path);
+  if (tm) {
+    const name = decodeURIComponent(tm[1]);
+    const agent = tm[2] ? decodeURIComponent(tm[2]) : undefined;
+    const t = await getTenant(name);
+    try {
+      if (method === 'GET' && !agent) return send(res, 200, { agents: await listAgents(kube, name) });
+      if (method === 'POST' && !agent) {
+        if (!t.spec?.access?.teleport) throw new HttpErr(400, 'enable Teleport access for this tenant first');
+        const issued = await issueAgentToken(kube, name, String((await body(req)).agent ?? ''));
+        audit(user, 'teleport-token', name, { agent: issued.agent });
+        return send(res, 200, issued);
+      }
+      if (method === 'DELETE' && agent) {
+        await revokeAgent(kube, name, agent);
+        audit(user, 'teleport-revoke', name, { agent });
+        return send(res, 200, { ok: true });
+      }
+    } catch (e) {
+      if (e instanceof BadAgent) throw new HttpErr(400, e.message);
+      throw e;
+    }
+    throw new HttpErr(405, 'method not allowed');
   }
 
   const m = /^\/api\/tenants\/([^/]+)(?:\/(credentials|kubeconfig))?$/.exec(path);

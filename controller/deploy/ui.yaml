@@ -52,6 +52,22 @@ metadata: { name: tenant-ui-secrets, namespace: tenant-system }
 roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: tenant-ui-secrets }
 subjects: [{ kind: ServiceAccount, name: tenant-ui, namespace: tenant-system }]
 ---
+# Issue/revoke Teleport agent tokens from the console: manage the operator CRs
+# (bots + provision tokens) in the teleport namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: tenant-ui-teleport, namespace: teleport }
+rules:
+- apiGroups: [resources.teleport.dev]
+  resources: [teleportbotsv1, teleportprovisiontokens]
+  verbs: [get, list, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: tenant-ui-teleport, namespace: teleport }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: tenant-ui-teleport }
+subjects: [{ kind: ServiceAccount, name: tenant-ui, namespace: tenant-system }]
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata: { name: tenant-ui, namespace: tenant-system }
