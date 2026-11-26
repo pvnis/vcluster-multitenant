@@ -102,3 +102,36 @@ spec:
   ingress:
     - fromEntities:
         - host
+---
+# Agent-sandbox egress proxy (phoenix-claw / ADR 0007 path 1). A sandbox that
+# egresses through its own per-sandbox Envoy proxy carries `midori.phoenix/egress:
+# proxy` on top of `network: sandbox` (default-denied above). This adds back exactly
+# its two needs — reach the egress-proxy, and DNS — and nothing else, so the proxy is
+# the sandbox's only way out and the Envoy RBAC there is the host allowlist. Pure
+# code-runner sandboxes (no `egress: proxy` label) are unaffected and stay no-egress.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: tenant-sandbox-egress-proxy
+  namespace: TENANT
+spec:
+  endpointSelector:
+    matchLabels:
+      vcluster.loft.sh/managed-by: TENANT
+      midori.phoenix/network: sandbox
+      midori.phoenix/egress: proxy
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            vcluster.loft.sh/managed-by: TENANT
+            app: egress-proxy
+      toPorts:
+        - ports:
+            - { port: "3128", protocol: TCP }
+    - toEndpoints:
+        - matchLabels:
+            k8s-app: vcluster-kube-dns
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
