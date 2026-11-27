@@ -10,7 +10,7 @@
 # Serving Gateway through this broker instead, a plain TCP forwarder in the
 # neutral namespace model-providers (no tenant label, like s3-gateway):
 #
-#   consumer pod --8080--> model-providers/PROVIDER --8080--> PROVIDER's Gateway pod
+#   consumer pod --8080--> model-providers/PROVIDER --443/TLS--> PROVIDER's Gateway pod
 #
 # Who may use the broker is decided per consumer by model-consumer.yaml; with
 # no consumer, only the node (probes) reaches it. What a consumer may do once
@@ -33,7 +33,10 @@ data:
     global
       log stdout format raw local0 warning
     defaults
-      mode tcp
+      # The Gateway's listener is HTTPS (TLS terminate) on :443, so the broker
+      # terminates the consumer's plain HTTP and re-originates TLS to the gateway
+      # (mode http + `ssl`). A plain TCP relay to :8080 hits a dead port and hangs.
+      mode http
       log global
       timeout connect 5s
       # Long completions stream for minutes; idle cut-off well above that.
@@ -44,7 +47,9 @@ data:
       bind :8080
       default_backend gateway
     backend gateway
-      server gateway model-gateway.PROVIDER.svc.cluster.local:8080 resolvers dns init-addr none
+      # `check` (over SSL) fails fast if the gateway listener is wrong/down,
+      # instead of hanging silently as the un-checked TCP relay did.
+      server gateway model-gateway.PROVIDER.svc.cluster.local:443 ssl verify none check resolvers dns init-addr none
     resolvers dns
       parse-resolv-conf
       hold valid 10s
@@ -113,7 +118,8 @@ spec:
   selector:
     vcluster.loft.sh/managed-by: PROVIDER
     gateway.networking.k8s.io/gateway-name: phoenix-serving-gateway
-  ports: [{ name: http, port: 8080, targetPort: 8080 }]
+  # The agentgateway Gateway listener is HTTPS on 443; the old 8080 port is dead.
+  ports: [{ name: https, port: 443, targetPort: 443 }]
 ---
 # Every tenant namespace is default-deny ingress: let the broker, and nothing
 # else from outside, reach the Gateway's listener.
@@ -134,4 +140,4 @@ spec:
         k8s:io.kubernetes.pod.namespace: model-providers
         app: model-broker
         midori.phoenix/provider: PROVIDER
-    toPorts: [{ ports: [{ port: "8080", protocol: TCP }] }]
+    toPorts: [{ ports: [{ port: "443", protocol: TCP }] }]   # the Gateway's HTTPS listener
