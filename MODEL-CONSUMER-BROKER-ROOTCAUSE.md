@@ -44,25 +44,32 @@ The path is: `consumer pod → broker (model-providers/PROVIDER) → model-gatew
    to the gateway but the gateway returned nothing** to the relayed plain-HTTP
    request.
 
-4. **The gateway's `:8080` listener answers neither plain HTTP nor TLS.**
-   `model-gateway` (`10.43.5.165`) points at the provider's **agentgateway
-   v1.7.0** pod (`10.42.5.16`, `1/1 Running` 10 d). agentgateway's data listeners
-   are configured dynamically (only `:15020` metrics is a static containerPort).
-   Through the broker's plain-TCP relay:
+4. **The gateway answers *nothing* on `:8080`.** `model-gateway` (`10.43.5.165`,
+   targetPort 8080) points at the provider's **agentgateway v1.7.0** pod
+   (`10.42.5.16`, `1/1 Running` 10 d). Through the broker's plain-TCP relay:
    - a plain HTTP `GET` → **0 bytes**, hangs;
-   - a TLS `ClientHello` → **no `ServerHello`**, hangs.
-   The TLS probe was to an **IP literal, so curl sent no SNI** — and an SNI-gated
-   Envoy/agentgateway TLS listener with no filter chain for a no-SNI connection
-   behaves exactly like this (accept, then hold). This matches the earlier note
-   that the broker should **TLS-tunnel `:8080 → gateway:443`** with the gateway's
-   hostname as SNI — a change discussed but **never landed in the repo or the
-   live haproxy config** (git: `model-provider.yaml` unchanged since 2026-10-14;
-   live config still `server gateway model-gateway.PROVIDER:8080` plain).
+   - a TLS `ClientHello` with **every SNI tried** (the gateway FQDN, `model-gateway`,
+     and a deliberately bogus name) → **no `ServerHello`**, hangs.
+   A no-response-for-any-protocol-or-SNI listener is **not** simple TLS/SNI gating
+   (a non-matching SNI would normally get a TLS alert or a default cert). The
+   agentgateway pod **declares no `:8080` port** (only `:15020` metrics and a
+   `:15021` health check), its listeners are delivered by **xDS** (dynamic; the
+   static `config.yaml` has only bootstrap + apiKey auth attributes), and it does
+   **apiKey auth**. The most likely cause is that its real inference listener is
+   **not on `:8080`** (the Gateway listener port/protocol moved), so the
+   platform's `model-gateway:8080` Service — and the broker behind it — now target
+   a port nothing serves, and haproxy retries/holds.
 
-**What changed:** the broker and the consumer wiring are unchanged; the provider's
-serving stack moved to an agentgateway (Envoy) whose `:8080` listener now expects
-TLS+SNI, so the broker's still-plain relay hangs. Not the consumer-side Envoy
-egress proxy — plain `curl` pods reproduce it with no sidecar in the path.
+**What changed:** the broker and consumer wiring are unchanged (`model-provider.yaml`
+untouched since 2026-10-14; live haproxy still `server gateway model-gateway.PROVIDER:8080`
+plain). The provider's serving stack moved to an xDS-driven agentgateway (Envoy),
+and the listener the broker targets no longer answers. **Not** the consumer-side
+Envoy egress proxy — plain `curl` pods reproduce it with no sidecar in the path.
+
+**Open question for the serving team (blocks the fix):** what is the agentgateway's
+real inference listener — **port, protocol (HTTP/HTTPS/h2), TLS + SNI + ALPN, and
+the apiKey expectation**? The correct values for `model-gateway`'s targetPort and
+the broker's backend cannot be written without them.
 
 ## Root cause
 
@@ -78,13 +85,15 @@ Service.
 
 ## Proposed fix (serving side — pick one, with the serving team)
 
-- **A. Make the broker speak TLS *with SNI* to the gateway (most likely).** Point
-  the backend at the gateway's TLS listener and present the gateway hostname as
-  SNI so its filter chain matches — e.g. `mode http` with
-  `server gateway model-gateway.PROVIDER.svc.cluster.local:443 ssl sni str(model-gateway.PROVIDER.svc.cluster.local) verify none`
-  (confirm the real port/SNI with the serving team). A bare `mode tcp` tunnel to
-  `:443` will *not* fix it if the listener is SNI-gated — haproxy must originate
-  the TLS and set SNI.
+- **A. Re-point `model-gateway` + the broker at the gateway's real listener.**
+  Once the serving team gives the actual port/protocol/TLS/SNI/ALPN, fix the
+  `model-gateway` Service `targetPort` and the haproxy `backend gateway` to match.
+  If it's HTTPS, haproxy must `mode http` + originate TLS with the right `sni`
+  (a bare `mode tcp` tunnel won't satisfy an SNI/ALPN-gated listener). If it's
+  h2, haproxy needs `proto h2`. **Note: `tenant-agents` rides the same broker —
+  this change is validated against both consumers, not just phoenix-claw.**
+  *(Blocked on the serving-team answer above; do NOT guess a target onto the live
+  shared broker.)*
 - **B. Give the gateway a plain-HTTP listener on `:8080`** that `model-gateway`
   targets, so the existing `mode tcp` relay works unchanged.
 - **C. Add a real health check to the broker** (`option httpchk` / `check`) so a
