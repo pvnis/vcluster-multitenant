@@ -1,9 +1,14 @@
 # Model-consumer / broker: why cross-tenant inference returns nothing
 
-**Status:** diagnosed 2026-11-27. The break is on the **provider (serving) side** —
-`broker → agentgateway` — not the consumer path and not the platform network
-policy. Consumer-side wiring (`spec.modelProviders`, the model-consumer CNPs,
-the floor, platform-guard, the replicated Service) is correct and functional.
+**Status: RESOLVED 2026-11-27.** The break was on the **provider (serving) side** —
+`broker → agentgateway` — not the consumer path or the platform network policy.
+Root cause: the gateway's only listener is **HTTPS on :443**, but `model-gateway`
+and the broker targeted a **dead :8080**. Fix applied and verified end-to-end (a
+phoenix-claw vCluster pod now gets `200` + the model list through the broker, by
+name, in ~35 ms). See **Resolution** at the bottom.
+
+Consumer-side wiring (`spec.modelProviders`, the model-consumer CNPs, the floor,
+platform-guard, the replicated Service) was correct and functional throughout.
 
 ## Symptom
 
@@ -66,10 +71,11 @@ plain). The provider's serving stack moved to an xDS-driven agentgateway (Envoy)
 and the listener the broker targets no longer answers. **Not** the consumer-side
 Envoy egress proxy — plain `curl` pods reproduce it with no sidecar in the path.
 
-**Open question for the serving team (blocks the fix):** what is the agentgateway's
-real inference listener — **port, protocol (HTTP/HTTPS/h2), TLS + SNI + ALPN, and
-the apiKey expectation**? The correct values for `model-gateway`'s targetPort and
-the broker's backend cannot be written without them.
+**Answered (read the provider's `Gateway` in its vCluster):** the
+`phoenix-serving-gateway` (agentgateway) has **one listener — HTTPS on :443, TLS
+terminate, no hostname restriction**, and does apiKey auth. The LB Service exposes
+`443→443` and a stale `8080→8080` that nothing serves. So `model-gateway`'s
+`targetPort: 8080` and the broker's `:8080` backend pointed at the dead port.
 
 ## Root cause
 
@@ -83,37 +89,35 @@ and/or the broker's upstream port+protocol in `model-provider.yaml`). It is not
 the consumer wiring, the tenant floor, the platform-guard, or the replicated
 Service.
 
-## Proposed fix (serving side — pick one, with the serving team)
+## Resolution (applied + verified)
 
-- **A. Re-point `model-gateway` + the broker at the gateway's real listener.**
-  Once the serving team gives the actual port/protocol/TLS/SNI/ALPN, fix the
-  `model-gateway` Service `targetPort` and the haproxy `backend gateway` to match.
-  If it's HTTPS, haproxy must `mode http` + originate TLS with the right `sni`
-  (a bare `mode tcp` tunnel won't satisfy an SNI/ALPN-gated listener). If it's
-  h2, haproxy needs `proto h2`. **Note: `tenant-agents` rides the same broker —
-  this change is validated against both consumers, not just phoenix-claw.**
-  *(Blocked on the serving-team answer above; do NOT guess a target onto the live
-  shared broker.)*
-- **B. Give the gateway a plain-HTTP listener on `:8080`** that `model-gateway`
-  targets, so the existing `mode tcp` relay works unchanged.
-- **C. Add a real health check to the broker** (`option httpchk` / `check`) so a
-  mis-wired backend fails fast and visibly instead of hanging — do this
-  regardless of A/B, so this class of bug surfaces immediately.
+Three coupled changes in `manifests/midori/model-provider.yaml`, targeting the
+gateway's real **HTTPS :443** listener. The broker's **front door stays :8080**
+(the agent code and the replicated Service call `http://<provider>.model-providers:8080`);
+only the **gateway-facing** side moved to 443:
 
-## Validation (before/after)
+1. **`model-gateway` Service** `8080→8080` ⟶ **`443→443`**.
+2. **`allow-model-broker` CNP** ingress port `8080` ⟶ **`443`** (the broker→gateway hop).
+3. **broker haproxy** `mode tcp` ⟶ **`mode http`**, backend
+   `server gateway model-gateway.PROVIDER:443 **ssl verify none check**` — it
+   terminates the consumer's plain HTTP and **re-originates TLS** to the gateway,
+   and `check` (over SSL) now fails fast instead of hanging if the backend is wrong.
 
-From a fresh non-sandbox pod inside any consumer vCluster:
+**Verified end-to-end** from a phoenix-claw vCluster pod (by name, through the
+broker): no-auth → `401 authentication failed` in 28 ms (reaches the gateway's
+apiKey auth); with the provider key → **`200` + the model list**
+(`auto, cheap-vmodel, Qwen3.5-4B, Qwen3.8-27B, reasoning-vmodel`) in ~35 ms. The
+earlier `NXDOMAIN` for the replicated name did not reproduce — it was a test
+artifact. `tenant-agents` rides the same broker, so it is fixed by the same change.
 
-```
-curl -sS -m 8 -H "Authorization: Bearer $MODEL_KEY" \
-  http://PROVIDER.model-providers:8080/v1/models
-```
-
-Should go from **hang/0-bytes → `200`/`401`**. Then confirm name resolution of
-`PROVIDER.model-providers` inside the consumer vCluster (one earlier probe saw
-`NXDOMAIN` for the replicated headless Service — recheck once the gateway leg is
-fixed; it may have been a test artifact, otherwise it is a second, smaller fix on
-the replicated-Service DNS).
+**How it was applied / durability:** the change is committed here *and* applied
+live by patching the controller's `tenant-templates` ConfigMap (the controller
+reads templates fresh per reconcile and server-side-applies them), then
+restarting the broker once to load the new haproxy config. **The live template
+patch is out-of-band from git — merge this PR so a controller redeploy keeps the
+fix.** Follow-up worth doing: add a config checksum annotation to the broker
+Deployment so future haproxy.cfg changes roll the pod automatically (today a
+manual restart is needed).
 
 ## Consumer side: confirmed correct, no change needed
 
