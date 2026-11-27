@@ -44,14 +44,25 @@ The path is: `consumer pod → broker (model-providers/PROVIDER) → model-gatew
    to the gateway but the gateway returned nothing** to the relayed plain-HTTP
    request.
 
-4. **The gateway doesn't serve plain HTTP on :8080.** `model-gateway`
-   (`10.43.5.165`) points at the provider's **agentgateway v1.7.0** pod
-   (`10.42.5.16`, `1/1 Running` 10 d). agentgateway's data listeners are
-   configured dynamically (only `:15020` metrics is a static containerPort). The
-   broker relays **plain TCP/HTTP** to `:8080`; the agentgateway listener there
-   evidently expects something else (TLS / HTTP-2). This matches a prior note
-   that the broker was meant to **TLS-tunnel `:8080 → gateway:443`** — i.e. the
-   broker template and the gateway listener disagree on port/protocol.
+4. **The gateway's `:8080` listener answers neither plain HTTP nor TLS.**
+   `model-gateway` (`10.43.5.165`) points at the provider's **agentgateway
+   v1.7.0** pod (`10.42.5.16`, `1/1 Running` 10 d). agentgateway's data listeners
+   are configured dynamically (only `:15020` metrics is a static containerPort).
+   Through the broker's plain-TCP relay:
+   - a plain HTTP `GET` → **0 bytes**, hangs;
+   - a TLS `ClientHello` → **no `ServerHello`**, hangs.
+   The TLS probe was to an **IP literal, so curl sent no SNI** — and an SNI-gated
+   Envoy/agentgateway TLS listener with no filter chain for a no-SNI connection
+   behaves exactly like this (accept, then hold). This matches the earlier note
+   that the broker should **TLS-tunnel `:8080 → gateway:443`** with the gateway's
+   hostname as SNI — a change discussed but **never landed in the repo or the
+   live haproxy config** (git: `model-provider.yaml` unchanged since 2026-10-14;
+   live config still `server gateway model-gateway.PROVIDER:8080` plain).
+
+**What changed:** the broker and the consumer wiring are unchanged; the provider's
+serving stack moved to an agentgateway (Envoy) whose `:8080` listener now expects
+TLS+SNI, so the broker's still-plain relay hangs. Not the consumer-side Envoy
+egress proxy — plain `curl` pods reproduce it with no sidecar in the path.
 
 ## Root cause
 
@@ -67,11 +78,13 @@ Service.
 
 ## Proposed fix (serving side — pick one, with the serving team)
 
-- **A. Match the broker to the gateway's real listener.** If the agentgateway
-  inference listener is TLS on `:443` (or h2c on another port), change the broker
-  backend to that target. For TLS, either terminate at haproxy
-  (`server ... ssl verify none` + `mode http`, or an `mode tcp` tunnel to `:443`)
-  or expose a plain-HTTP listener on the gateway for the broker to hit.
+- **A. Make the broker speak TLS *with SNI* to the gateway (most likely).** Point
+  the backend at the gateway's TLS listener and present the gateway hostname as
+  SNI so its filter chain matches — e.g. `mode http` with
+  `server gateway model-gateway.PROVIDER.svc.cluster.local:443 ssl sni str(model-gateway.PROVIDER.svc.cluster.local) verify none`
+  (confirm the real port/SNI with the serving team). A bare `mode tcp` tunnel to
+  `:443` will *not* fix it if the listener is SNI-gated — haproxy must originate
+  the TLS and set SNI.
 - **B. Give the gateway a plain-HTTP listener on `:8080`** that `model-gateway`
   targets, so the existing `mode tcp` relay works unchanged.
 - **C. Add a real health check to the broker** (`option httpchk` / `check`) so a
