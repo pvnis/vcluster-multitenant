@@ -24,8 +24,11 @@ spec:
   endpointSelector:
     matchLabels:
       vcluster.loft.sh/managed-by: CONSUMER
-    matchExpressions:   # not sandboxes (../cilium/tenant-allow.yaml, tenant-sandbox)
-      - {key: midori.phoenix/network, operator: NotIn, values: [sandbox]}
+    # Sandboxes are included on purpose: a MidoShell agent runs INSIDE the sandbox
+    # and reaches the broker for inference directly (NO_PROXY; the broker is HTTP
+    # and the egress proxy is HTTPS-only). The sandbox is otherwise default-deny
+    # (../cilium/tenant-allow.yaml, tenant-sandbox) + proxy+DNS only; this grants
+    # it exactly :8080 to the broker, nothing more.
   egress:
   - toEndpoints:
     - matchLabels:
